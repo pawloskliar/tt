@@ -1,0 +1,1045 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rally Recorder - PoC</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 16px;
+            padding: 24px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 24px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .controls {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 12px;
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        label {
+            font-size: 12px;
+            font-weight: 600;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        select, input {
+            padding: 10px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            font-family: inherit;
+            transition: all 0.2s;
+        }
+
+        select:focus, input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .player-toggle {
+            display: flex;
+            gap: 8px;
+        }
+
+        .player-btn {
+            flex: 1;
+            padding: 10px;
+            border: 2px solid #e0e0e0;
+            background: white;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+
+        .player-btn.active {
+            border-color: #667eea;
+            background: #667eea;
+            color: white;
+        }
+
+        .table-container {
+            position: relative;
+            width: 100%;
+            max-width: 800px;
+            margin: 0 auto 24px;
+            aspect-ratio: 2.74/1.525;
+            background: linear-gradient(180deg, #1e7d32 0%, #165c26 100%);
+            border: 4px solid #0d3d1a;
+            border-radius: 12px;
+            cursor: crosshair;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+        }
+
+        .table-net {
+            position: absolute;
+            top: 50%;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: white;
+            transform: translateY(-50%);
+            pointer-events: none;
+        }
+
+        .table-net::before {
+            content: '';
+            position: absolute;
+            top: -6px;
+            left: 0;
+            right: 0;
+            height: 14px;
+            background: repeating-linear-gradient(
+                90deg,
+                white 0px,
+                white 10px,
+                transparent 10px,
+                transparent 20px
+            );
+        }
+
+        .center-line {
+            position: absolute;
+            left: 50%;
+            top: 0;
+            bottom: 0;
+            width: 1px;
+            background: rgba(255, 255, 255, 0.3);
+            transform: translateX(-50%);
+            pointer-events: none;
+        }
+
+        svg {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+
+        .shot-marker {
+            position: absolute;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            border: 2px solid white;
+            transform: translate(-50%, -50%);
+            cursor: pointer;
+            pointer-events: all;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+        }
+
+        .shot-marker.player-you {
+            background: #3b82f6;
+        }
+
+        .shot-marker.player-opponent {
+            background: #ef4444;
+        }
+
+        .shot-number {
+            position: absolute;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: bold;
+            border: 2px solid white;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+        }
+
+        .spin-indicator {
+            position: absolute;
+            font-size: 24px;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+            filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.6));
+            animation: spinPulse 2s ease-in-out infinite;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 4px 8px;
+            border-radius: 6px;
+            border: 2px solid rgba(255, 255, 255, 0.8);
+        }
+
+        @keyframes spinPulse {
+            0%, 100% { opacity: 0.95; }
+            50% { opacity: 1; transform: translate(-50%, -50%) scale(1.08); }
+        }
+
+        .shot-list {
+            margin-bottom: 24px;
+        }
+
+        .shot-list h3 {
+            color: #333;
+            margin-bottom: 12px;
+            font-size: 16px;
+        }
+
+        .shot-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            margin-bottom: 8px;
+        }
+
+        .shot-item-number {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            color: white;
+            flex-shrink: 0;
+        }
+
+        .shot-item-details {
+            flex: 1;
+            font-size: 14px;
+            color: #333;
+        }
+
+        .shot-item-delete {
+            color: #999;
+            cursor: pointer;
+            padding: 4px 8px;
+            font-size: 18px;
+            transition: color 0.2s;
+        }
+
+        .shot-item-delete:hover {
+            color: #ef4444;
+        }
+
+        .actions {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-secondary {
+            background: white;
+            color: #667eea;
+            border: 2px solid #667eea;
+        }
+
+        .btn-secondary:hover {
+            background: #f0f4ff;
+        }
+
+        .btn-danger {
+            background: #ef4444;
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #dc2626;
+        }
+
+        .info-box {
+            background: #e0e7ff;
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 24px;
+            color: #667eea;
+            font-size: 14px;
+            border-left: 4px solid #667eea;
+        }
+
+        .context-menu {
+            position: fixed;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            padding: 16px;
+            z-index: 1000;
+            display: none;
+            min-width: 280px;
+        }
+
+        .context-menu.active {
+            display: block;
+        }
+
+        .context-menu-header {
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 12px;
+            font-size: 14px;
+        }
+
+        .context-menu-section {
+            margin-bottom: 12px;
+        }
+
+        .context-menu-label {
+            font-size: 12px;
+            font-weight: 600;
+            color: #666;
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .context-menu-buttons {
+            display: grid;
+            gap: 6px;
+        }
+
+        .context-menu-btn {
+            padding: 8px 12px;
+            border: 2px solid #e0e0e0;
+            background: white;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            text-align: left;
+            transition: all 0.2s;
+        }
+
+        .context-menu-btn:hover {
+            border-color: #667eea;
+            background: #f0f4ff;
+        }
+
+        .context-menu-btn.selected {
+            border-color: #667eea;
+            background: #667eea;
+            color: white;
+            font-weight: 600;
+        }
+
+        .context-menu-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 12px;
+        }
+
+        .context-menu-submit {
+            flex: 1;
+            padding: 10px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .context-menu-submit:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        .context-menu-cancel {
+            padding: 10px 16px;
+            background: white;
+            color: #999;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .context-menu-cancel:hover {
+            border-color: #ef4444;
+            color: #ef4444;
+        }
+
+        .preview-arrow {
+            opacity: 0.5;
+            stroke-dasharray: 5, 5;
+        }
+
+        .saved-rallies {
+            margin-top: 32px;
+            padding-top: 32px;
+            border-top: 2px solid #e0e0e0;
+        }
+
+        .saved-rallies h2 {
+            color: #333;
+            margin-bottom: 16px;
+        }
+
+        .rally-card {
+            background: #f8f9fa;
+            padding: 16px;
+            border-radius: 12px;
+            margin-bottom: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .rally-card:hover {
+            background: #e9ecef;
+            transform: translateY(-2px);
+        }
+
+        .rally-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .rally-card-title {
+            font-weight: 600;
+            color: #333;
+        }
+
+        .rally-card-meta {
+            font-size: 13px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🏓 Rally Recorder - PoC</h1>
+
+        <div class="info-box">
+            💡 <strong>First shot:</strong> Drag from start to end. <strong>Next shots:</strong> Click where the ball lands - it will automatically chain from the last point!
+        </div>
+
+        <div class="controls">
+            <div class="control-group">
+                <label>Player</label>
+                <div class="player-toggle">
+                    <button class="player-btn active" data-player="you">You</button>
+                    <button class="player-btn" data-player="opponent">Opponent</button>
+                </div>
+            </div>
+
+            <div class="control-group">
+                <label>Rally Title</label>
+                <input type="text" id="rallyTitle" placeholder="e.g., Winning serve pattern">
+            </div>
+        </div>
+
+        <div class="table-container" id="tableContainer">
+            <div class="table-net"></div>
+            <div class="center-line"></div>
+            <svg id="trajectorySvg" viewBox="0 0 100 100" preserveAspectRatio="none">
+                <defs>
+                    <marker id="arrowhead-blue" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+                        <polygon points="0 0, 10 3, 0 6" fill="#3b82f6" />
+                    </marker>
+                    <marker id="arrowhead-red" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+                        <polygon points="0 0, 10 3, 0 6" fill="#ef4444" />
+                    </marker>
+                </defs>
+            </svg>
+        </div>
+
+        <!-- Context Menu -->
+        <div class="context-menu" id="contextMenu">
+            <div class="context-menu-header">Configure Shot</div>
+
+            <div class="context-menu-section">
+                <div class="context-menu-label">Shot Type</div>
+                <div class="context-menu-buttons" id="shotTypeButtons">
+                    <button class="context-menu-btn" data-type="serve">Serve</button>
+                    <button class="context-menu-btn" data-type="push">Push</button>
+                    <button class="context-menu-btn" data-type="loop">Loop</button>
+                    <button class="context-menu-btn" data-type="drive">Drive</button>
+                    <button class="context-menu-btn" data-type="smash">Smash</button>
+                    <button class="context-menu-btn" data-type="block">Block</button>
+                    <button class="context-menu-btn" data-type="lob">Lob</button>
+                    <button class="context-menu-btn" data-type="drop">Drop Shot</button>
+                    <button class="context-menu-btn" data-type="flip">Flip</button>
+                </div>
+            </div>
+
+            <div class="context-menu-section">
+                <div class="context-menu-label">Spin</div>
+                <div class="context-menu-buttons" id="spinButtons">
+                    <button class="context-menu-btn" data-spin="topspin">Topspin ⤴️</button>
+                    <button class="context-menu-btn" data-spin="backspin">Backspin ⤵️</button>
+                    <button class="context-menu-btn" data-spin="sidespin-left">Sidespin Left ↪️</button>
+                    <button class="context-menu-btn" data-spin="sidespin-right">Sidespin Right ↩️</button>
+                    <button class="context-menu-btn" data-spin="no-spin">No Spin ➡️</button>
+                </div>
+            </div>
+
+            <div class="context-menu-actions">
+                <button class="context-menu-cancel" id="contextMenuCancel">Cancel</button>
+                <button class="context-menu-submit" id="contextMenuSubmit">Add Shot</button>
+            </div>
+        </div>
+
+        <div class="shot-list" id="shotList">
+            <h3>Shots in Rally (<span id="shotCount">0</span>)</h3>
+        </div>
+
+        <div class="actions">
+            <button class="btn btn-primary" id="saveRally">💾 Save Rally</button>
+            <button class="btn btn-secondary" id="undoShot">↩️ Undo Last Shot</button>
+            <button class="btn btn-danger" id="clearRally">🗑️ Clear All</button>
+        </div>
+
+        <div class="saved-rallies" id="savedRallies">
+            <h2>Saved Rallies (<span id="savedCount">0</span>)</h2>
+            <div id="rallyList"></div>
+        </div>
+    </div>
+
+    <script>
+        // State
+        let currentPlayer = 'you';
+        let shots = [];
+        let savedRallies = JSON.parse(localStorage.getItem('rallies') || '[]');
+        let isDragging = false;
+        let dragStart = null;
+        let dragEnd = null;
+        let pendingShot = null;
+        let selectedShotType = 'serve';
+        let selectedSpin = 'topspin';
+        let chainMode = false; // Auto-chain from last shot
+
+        // DOM elements
+        const tableContainer = document.getElementById('tableContainer');
+        const trajectorySvg = document.getElementById('trajectorySvg');
+        const shotListElement = document.getElementById('shotList');
+        const playerButtons = document.querySelectorAll('.player-btn');
+        const rallyTitleInput = document.getElementById('rallyTitle');
+        const contextMenu = document.getElementById('contextMenu');
+        const shotTypeButtons = document.querySelectorAll('#shotTypeButtons .context-menu-btn');
+        const spinButtons = document.querySelectorAll('#spinButtons .context-menu-btn');
+        const contextMenuSubmit = document.getElementById('contextMenuSubmit');
+        const contextMenuCancel = document.getElementById('contextMenuCancel');
+
+        // Player toggle
+        playerButtons.forEach(btn => {
+            btn.addEventListener('click', () => {
+                playerButtons.forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                currentPlayer = btn.dataset.player;
+            });
+        });
+
+        // Drag and drop handlers
+        tableContainer.addEventListener('mousedown', (e) => {
+            if (e.target === tableContainer || e.target.classList.contains('center-line') ||
+                e.target.classList.contains('table-net')) {
+                const rect = tableContainer.getBoundingClientRect();
+                const x = ((e.clientX - rect.left) / rect.width) * 100;
+                const y = ((e.clientY - rect.top) / rect.height) * 100;
+
+                // If in chain mode and we have shots, start from last shot's end point
+                if (chainMode && shots.length > 0) {
+                    const lastShot = shots[shots.length - 1];
+                    dragStart = { x: lastShot.x, y: lastShot.y };
+                } else {
+                    dragStart = { x, y };
+                }
+
+                isDragging = true;
+                dragEnd = { x, y };
+
+                e.preventDefault();
+            }
+        });
+
+        tableContainer.addEventListener('mousemove', (e) => {
+            if (isDragging && dragStart) {
+                const rect = tableContainer.getBoundingClientRect();
+                const x = ((e.clientX - rect.left) / rect.width) * 100;
+                const y = ((e.clientY - rect.top) / rect.height) * 100;
+
+                dragEnd = { x, y };
+                drawPreviewArrow();
+            }
+        });
+
+        tableContainer.addEventListener('mouseup', (e) => {
+            if (isDragging && dragStart && dragEnd) {
+                const distance = Math.sqrt(
+                    Math.pow(dragEnd.x - dragStart.x, 2) +
+                    Math.pow(dragEnd.y - dragStart.y, 2)
+                );
+
+                // In chain mode, allow small distances (clicks), otherwise require drag
+                const minDistance = chainMode && shots.length > 0 ? 0.5 : 2;
+
+                if (distance > minDistance) {
+                    pendingShot = {
+                        startX: dragStart.x,
+                        startY: dragStart.y,
+                        endX: dragEnd.x,
+                        endY: dragEnd.y
+                    };
+
+                    showContextMenu(e.clientX, e.clientY);
+                } else {
+                    clearPreviewArrow();
+                }
+
+                isDragging = false;
+                dragStart = null;
+                dragEnd = null;
+            }
+        });
+
+        // Prevent default drag behavior
+        tableContainer.addEventListener('dragstart', (e) => e.preventDefault());
+
+        // Draw preview arrow while dragging
+        function drawPreviewArrow() {
+            clearPreviewArrow();
+
+            const color = currentPlayer === 'you' ? '#3b82f6' : '#ef4444';
+            const marker = currentPlayer === 'you' ? 'arrowhead-blue' : 'arrowhead-red';
+
+            const dx = dragEnd.x - dragStart.x;
+            const dy = dragEnd.y - dragStart.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+
+            if (distance < 1) return;
+
+            const adjustRatio = Math.max(0, (distance - 1.5) / distance);
+            const endX = dragStart.x + dx * adjustRatio;
+            const endY = dragStart.y + dy * adjustRatio;
+
+            const controlX = (dragStart.x + endX) / 2;
+            const controlY = (dragStart.y + endY) / 2 - 10;
+
+            const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            path.setAttribute('id', 'preview-arrow');
+            path.setAttribute('class', 'preview-arrow');
+            path.setAttribute('d', `M ${dragStart.x} ${dragStart.y} Q ${controlX} ${controlY} ${endX} ${endY}`);
+            path.setAttribute('stroke', color);
+            path.setAttribute('stroke-width', '0.3');
+            path.setAttribute('fill', 'none');
+            path.setAttribute('marker-end', `url(#${marker})`);
+
+            trajectorySvg.appendChild(path);
+        }
+
+        function clearPreviewArrow() {
+            const preview = document.getElementById('preview-arrow');
+            if (preview) preview.remove();
+        }
+
+        // Context menu
+        function showContextMenu(x, y) {
+            contextMenu.classList.add('active');
+
+            // Reset selections to defaults
+            shotTypeButtons.forEach(btn => {
+                btn.classList.remove('selected');
+                if (btn.dataset.type === selectedShotType) {
+                    btn.classList.add('selected');
+                }
+            });
+
+            spinButtons.forEach(btn => {
+                btn.classList.remove('selected');
+                if (btn.dataset.spin === selectedSpin) {
+                    btn.classList.add('selected');
+                }
+            });
+
+            // Position menu and ensure it stays within viewport
+            // First, set position to get dimensions
+            contextMenu.style.left = `${x}px`;
+            contextMenu.style.top = `${y}px`;
+
+            // Immediately adjust position to keep menu in viewport
+            requestAnimationFrame(() => {
+                const rect = contextMenu.getBoundingClientRect();
+                let adjustedX = x;
+                let adjustedY = y;
+
+                // Adjust horizontal position
+                if (rect.right > window.innerWidth) {
+                    adjustedX = window.innerWidth - rect.width - 10;
+                }
+                if (adjustedX < 10) {
+                    adjustedX = 10;
+                }
+
+                // Adjust vertical position
+                if (rect.bottom > window.innerHeight) {
+                    adjustedY = window.innerHeight - rect.height - 10;
+                }
+                if (adjustedY < 10) {
+                    adjustedY = 10;
+                }
+
+                contextMenu.style.left = `${adjustedX}px`;
+                contextMenu.style.top = `${adjustedY}px`;
+            });
+        }
+
+        function hideContextMenu() {
+            contextMenu.classList.remove('active');
+            clearPreviewArrow();
+            pendingShot = null;
+        }
+
+        // Shot type selection
+        shotTypeButtons.forEach(btn => {
+            btn.addEventListener('click', () => {
+                shotTypeButtons.forEach(b => b.classList.remove('selected'));
+                btn.classList.add('selected');
+                selectedShotType = btn.dataset.type;
+            });
+        });
+
+        // Spin selection
+        spinButtons.forEach(btn => {
+            btn.addEventListener('click', () => {
+                spinButtons.forEach(b => b.classList.remove('selected'));
+                btn.classList.add('selected');
+                selectedSpin = btn.dataset.spin;
+            });
+        });
+
+        // Context menu submit
+        contextMenuSubmit.addEventListener('click', () => {
+            if (pendingShot) {
+                addShot(pendingShot);
+                hideContextMenu();
+                // Enable chain mode after first shot
+                chainMode = true;
+            }
+        });
+
+        // Context menu cancel
+        contextMenuCancel.addEventListener('click', () => {
+            hideContextMenu();
+        });
+
+        // Close context menu when clicking outside
+        document.addEventListener('click', (e) => {
+            if (!contextMenu.contains(e.target) && !tableContainer.contains(e.target)) {
+                hideContextMenu();
+            }
+        });
+
+        // Add shot with drag data
+        function addShot(dragData) {
+            const shot = {
+                id: Date.now(),
+                player: currentPlayer,
+                shotType: selectedShotType,
+                spin: selectedSpin,
+                startX: dragData.startX,
+                startY: dragData.startY,
+                x: dragData.endX,
+                y: dragData.endY,
+                timestamp: new Date().toISOString()
+            };
+
+            shots.push(shot);
+            renderRally();
+            updateShotList();
+        }
+
+        // Render rally on table
+        function renderRally() {
+            // Clear existing markers
+            document.querySelectorAll('.shot-marker, .shot-number, .spin-indicator').forEach(el => el.remove());
+            trajectorySvg.querySelectorAll('path, text').forEach(el => el.remove());
+
+            // Draw each shot as a trajectory from start to end
+            shots.forEach((shot, index) => {
+                const color = shot.player === 'you' ? '#3b82f6' : '#ef4444';
+                const marker = shot.player === 'you' ? 'arrowhead-blue' : 'arrowhead-red';
+
+                // Calculate direction vector for arrow adjustment
+                const dx = shot.x - shot.startX;
+                const dy = shot.y - shot.startY;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+
+                // Adjust endpoint to stop before the marker (about 1.5% back)
+                const adjustRatio = Math.max(0, (distance - 1.5) / distance);
+                const endX = shot.startX + dx * adjustRatio;
+                const endY = shot.startY + dy * adjustRatio;
+
+                // Create curved path
+                const controlX = (shot.startX + endX) / 2;
+                const controlY = (shot.startY + endY) / 2 - 10;
+
+                // Stroke width based on shot type
+                const strokeWidth = getStrokeWidth(shot.shotType);
+                const strokeDashArray = shot.shotType === 'serve' ? '0.8,0.4' : 'none';
+
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                path.setAttribute('d', `M ${shot.startX} ${shot.startY} Q ${controlX} ${controlY} ${endX} ${endY}`);
+                path.setAttribute('stroke', color);
+                path.setAttribute('stroke-width', strokeWidth);
+                path.setAttribute('fill', 'none');
+                path.setAttribute('marker-end', `url(#${marker})`);
+                path.setAttribute('opacity', '0.85');
+                if (strokeDashArray !== 'none') {
+                    path.setAttribute('stroke-dasharray', strokeDashArray);
+                }
+
+                trajectorySvg.appendChild(path);
+
+                // Add spin indicator at midpoint of trajectory
+                const spinEmoji = getSpinEmoji(shot.spin);
+
+                const spinIndicator = document.createElement('div');
+                spinIndicator.className = 'spin-indicator';
+                spinIndicator.textContent = spinEmoji;
+                spinIndicator.style.left = `${controlX}%`;
+                spinIndicator.style.top = `${controlY - 2}%`;
+                spinIndicator.style.color = '#fbbf24';
+                spinIndicator.title = shot.spin.replace('-', ' ');
+                tableContainer.appendChild(spinIndicator);
+
+                // Landing point marker
+                const landingMarker = document.createElement('div');
+                landingMarker.className = `shot-marker player-${shot.player}`;
+                landingMarker.style.left = `${shot.x}%`;
+                landingMarker.style.top = `${shot.y}%`;
+                landingMarker.dataset.shotId = shot.id;
+                landingMarker.title = `${shot.shotType} (${shot.spin})`;
+                tableContainer.appendChild(landingMarker);
+
+                // Shot number at landing point
+                const number = document.createElement('div');
+                number.className = 'shot-number';
+                number.textContent = index + 1;
+                number.style.left = `${shot.x}%`;
+                number.style.top = `${shot.y - 8}%`;
+                tableContainer.appendChild(number);
+            });
+        }
+
+        // Update shot list
+        function updateShotList() {
+            const listHtml = shots.map((shot, index) => {
+                const spinEmoji = getSpinEmoji(shot.spin);
+                const color = shot.player === 'you' ? '#3b82f6' : '#ef4444';
+
+                return `
+                    <div class="shot-item">
+                        <div class="shot-item-number" style="background: ${color};">${index + 1}</div>
+                        <div class="shot-item-details">
+                            <strong>${shot.player === 'you' ? 'You' : 'Opponent'}</strong>:
+                            ${shot.shotType} ${spinEmoji}
+                        </div>
+                        <div class="shot-item-delete" onclick="deleteShot(${shot.id})">×</div>
+                    </div>
+                `;
+            }).join('');
+
+            shotListElement.innerHTML = `<h3>Shots in Rally (<span id="shotCount">${shots.length}</span>)</h3>` + listHtml;
+        }
+
+        // Get spin emoji
+        function getSpinEmoji(spin) {
+            const emojis = {
+                'topspin': '⤴️',
+                'backspin': '⤵️',
+                'sidespin-left': '↪️',
+                'sidespin-right': '↩️',
+                'no-spin': '➡️'
+            };
+            return emojis[spin] || '➡️';
+        }
+
+        // Get stroke width based on shot type
+        // Using smaller values for percentage-based coordinate system (viewBox 0-100)
+        function getStrokeWidth(shotType) {
+            const widths = {
+                'serve': 0.4,
+                'smash': 0.6,
+                'loop': 0.5,
+                'drive': 0.4,
+                'push': 0.3,
+                'block': 0.3,
+                'lob': 0.3,
+                'drop': 0.2,
+                'flip': 0.3
+            };
+            return widths[shotType] || 0.3;
+        }
+
+        // Delete shot
+        window.deleteShot = function(shotId) {
+            shots = shots.filter(s => s.id !== shotId);
+            if (shots.length === 0) {
+                chainMode = false;
+            }
+            renderRally();
+            updateShotList();
+        };
+
+        // Undo last shot
+        document.getElementById('undoShot').addEventListener('click', () => {
+            if (shots.length > 0) {
+                shots.pop();
+                if (shots.length === 0) {
+                    chainMode = false;
+                }
+                renderRally();
+                updateShotList();
+            }
+        });
+
+        // Clear rally
+        document.getElementById('clearRally').addEventListener('click', () => {
+            if (confirm('Clear all shots from current rally?')) {
+                shots = [];
+                chainMode = false;
+                renderRally();
+                updateShotList();
+            }
+        });
+
+        // Save rally
+        document.getElementById('saveRally').addEventListener('click', () => {
+            if (shots.length === 0) {
+                alert('Add at least one shot to save the rally!');
+                return;
+            }
+
+            const title = rallyTitleInput.value.trim() || `Rally ${savedRallies.length + 1}`;
+
+            const rally = {
+                id: Date.now(),
+                title: title,
+                shots: [...shots],
+                createdAt: new Date().toISOString()
+            };
+
+            savedRallies.unshift(rally);
+            localStorage.setItem('rallies', JSON.stringify(savedRallies));
+
+            // Clear current rally
+            shots = [];
+            chainMode = false;
+            rallyTitleInput.value = '';
+            renderRally();
+            updateShotList();
+            renderSavedRallies();
+
+            alert(`Rally "${title}" saved successfully!`);
+        });
+
+        // Render saved rallies
+        function renderSavedRallies() {
+            const rallyListHtml = savedRallies.map(rally => {
+                const date = new Date(rally.createdAt).toLocaleDateString();
+                const time = new Date(rally.createdAt).toLocaleTimeString();
+
+                return `
+                    <div class="rally-card" onclick="loadRally(${rally.id})">
+                        <div class="rally-card-header">
+                            <div class="rally-card-title">${rally.title}</div>
+                            <button class="btn btn-danger" style="padding: 4px 8px; font-size: 12px;"
+                                    onclick="event.stopPropagation(); deleteRally(${rally.id})">Delete</button>
+                        </div>
+                        <div class="rally-card-meta">
+                            ${rally.shots.length} shots • ${date} ${time}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            document.getElementById('rallyList').innerHTML = rallyListHtml || '<p style="color: #999;">No saved rallies yet</p>';
+            document.getElementById('savedCount').textContent = savedRallies.length;
+        }
+
+        // Load rally
+        window.loadRally = function(rallyId) {
+            const rally = savedRallies.find(r => r.id === rallyId);
+            if (rally) {
+                shots = [...rally.shots];
+                rallyTitleInput.value = rally.title;
+                renderRally();
+                updateShotList();
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+            }
+        };
+
+        // Delete rally
+        window.deleteRally = function(rallyId) {
+            if (confirm('Delete this rally?')) {
+                savedRallies = savedRallies.filter(r => r.id !== rallyId);
+                localStorage.setItem('rallies', JSON.stringify(savedRallies));
+                renderSavedRallies();
+            }
+        };
+
+        // Initialize
+        renderSavedRallies();
+        updateShotList();
+    </script>
+</body>
+</html>
