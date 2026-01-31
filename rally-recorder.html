@@ -42,9 +42,9 @@
             --panel-border: rgba(255, 255, 255, 0.1);
             --shadow-color: rgba(0, 0, 0, 0.3);
             --shadow-color-strong: rgba(0, 0, 0, 0.5);
-            --table-bg-start: #1e40af;
-            --table-bg-end: #1e3a8a;
-            --table-border: #1e3a8a;
+            --table-bg-start: #0891b2;
+            --table-bg-end: #0e7490;
+            --table-border: #155e75;
         }
 
         body {
@@ -151,6 +151,44 @@
             box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25), 0 4px 12px rgba(0, 0, 0, 0.15);
             transform-origin: left center;
             transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), background 0.3s ease, border-color 0.3s ease;
+        }
+
+        body.dark-mode .table-container {
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4), 0 4px 12px rgba(0, 0, 0, 0.25),
+                        0 0 0 1px rgba(255, 255, 255, 0.1) inset;
+        }
+
+        .table-container::after {
+            content: '';
+            position: absolute;
+            bottom: 8px;
+            right: 8px;
+            width: 24px;
+            height: 24px;
+            background: rgba(255, 255, 255, 0.15);
+            border-radius: 50%;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            pointer-events: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        body.dark-mode .table-container::after {
+            content: '🎨';
+            font-size: 14px;
+            opacity: 0.4;
+            animation: colorHintPulse 3s ease-in-out infinite;
+        }
+
+        body.dark-mode .table-container:hover::after {
+            opacity: 0.8;
+        }
+
+        @keyframes colorHintPulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.1); }
         }
 
         .table-wrapper {
@@ -1675,6 +1713,113 @@
             }
         };
 
+        // Table color schemes for dark mode
+        const tableColorSchemes = [
+            {
+                name: 'Cyan/Teal',
+                start: '#0891b2',
+                end: '#0e7490',
+                border: '#155e75'
+            },
+            {
+                name: 'Electric Blue',
+                start: '#3b82f6',
+                end: '#2563eb',
+                border: '#1d4ed8'
+            },
+            {
+                name: 'Indigo',
+                start: '#6366f1',
+                end: '#4f46e5',
+                border: '#4338ca'
+            },
+            {
+                name: 'Turquoise',
+                start: '#14b8a6',
+                end: '#0d9488',
+                border: '#0f766e'
+            },
+            {
+                name: 'Deep Ocean Blue',
+                start: '#1e3a8a',
+                end: '#1e40af',
+                border: '#1e3a8a'
+            }
+        ];
+
+        let currentColorSchemeIndex = parseInt(localStorage.getItem('tableColorScheme')) || 0;
+
+        // Apply current table color scheme
+        function applyTableColorScheme() {
+            const scheme = tableColorSchemes[currentColorSchemeIndex];
+
+            // Set the dark mode colors on body element to override the CSS
+            if (document.body.classList.contains('dark-mode')) {
+                document.body.style.setProperty('--table-bg-start', scheme.start);
+                document.body.style.setProperty('--table-bg-end', scheme.end);
+                document.body.style.setProperty('--table-border', scheme.border);
+            }
+        }
+
+        // Cycle table colors on double-click
+        tableContainer.addEventListener('dblclick', (e) => {
+            // Only cycle in dark mode
+            if (document.body.classList.contains('dark-mode')) {
+                currentColorSchemeIndex = (currentColorSchemeIndex + 1) % tableColorSchemes.length;
+                localStorage.setItem('tableColorScheme', currentColorSchemeIndex);
+                applyTableColorScheme();
+
+                // Show notification
+                const scheme = tableColorSchemes[currentColorSchemeIndex];
+                showColorNotification(scheme.name);
+            }
+        });
+
+        // Show color scheme notification
+        function showColorNotification(schemeName) {
+            // Remove existing notification
+            const existing = document.getElementById('colorNotification');
+            if (existing) existing.remove();
+
+            const notification = document.createElement('div');
+            notification.id = 'colorNotification';
+            notification.textContent = `Table Color: ${schemeName}`;
+            notification.style.cssText = `
+                position: fixed;
+                top: 80px;
+                left: 50%;
+                transform: translateX(-50%);
+                background: rgba(0, 0, 0, 0.8);
+                color: white;
+                padding: 12px 24px;
+                border-radius: 8px;
+                font-size: 14px;
+                font-weight: 600;
+                z-index: 10000;
+                backdrop-filter: blur(10px);
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+                animation: fadeInOut 2s ease-in-out;
+            `;
+
+            // Add animation keyframes
+            if (!document.getElementById('notificationStyle')) {
+                const style = document.createElement('style');
+                style.id = 'notificationStyle';
+                style.textContent = `
+                    @keyframes fadeInOut {
+                        0% { opacity: 0; transform: translateX(-50%) translateY(-10px); }
+                        20% { opacity: 1; transform: translateX(-50%) translateY(0); }
+                        80% { opacity: 1; transform: translateX(-50%) translateY(0); }
+                        100% { opacity: 0; transform: translateX(-50%) translateY(-10px); }
+                    }
+                `;
+                document.head.appendChild(style);
+            }
+
+            document.body.appendChild(notification);
+            setTimeout(() => notification.remove(), 2000);
+        }
+
         // Theme toggle functionality
         const themeToggle = document.getElementById('themeToggle');
         const lightModeIcon = document.getElementById('lightModeIcon');
@@ -1686,22 +1831,39 @@
             document.body.classList.add('dark-mode');
         }
 
+        // Apply saved color scheme
+        applyTableColorScheme();
+
         // Toggle theme on click
         themeToggle.addEventListener('click', () => {
             document.body.classList.toggle('dark-mode');
             const theme = document.body.classList.contains('dark-mode') ? 'dark' : 'light';
             localStorage.setItem('theme', theme);
+
+            if (theme === 'dark') {
+                applyTableColorScheme();
+            } else {
+                // Clear inline styles for light mode
+                document.body.style.removeProperty('--table-bg-start');
+                document.body.style.removeProperty('--table-bg-end');
+                document.body.style.removeProperty('--table-border');
+            }
         });
 
         // Also toggle on icon click
         lightModeIcon.addEventListener('click', () => {
             document.body.classList.remove('dark-mode');
             localStorage.setItem('theme', 'light');
+            // Clear inline styles for light mode
+            document.body.style.removeProperty('--table-bg-start');
+            document.body.style.removeProperty('--table-bg-end');
+            document.body.style.removeProperty('--table-border');
         });
 
         darkModeIcon.addEventListener('click', () => {
             document.body.classList.add('dark-mode');
             localStorage.setItem('theme', 'dark');
+            applyTableColorScheme();
         });
 
         // Initialize
