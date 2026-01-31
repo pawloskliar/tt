@@ -289,6 +289,7 @@
             display: flex;
             flex-direction: column;
             gap: 8px;
+            align-items: center;
         }
 
         .racket-side-label {
@@ -298,13 +299,26 @@
             text-transform: uppercase;
         }
 
+        .racket-preview-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+        }
+
         .racket-preview {
-            width: 60px;
-            height: 60px;
+            width: 70px;
+            height: 70px;
             border-radius: 50%;
             border: 3px solid #333;
-            margin: 8px auto;
             position: relative;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .racket-preview:hover {
+            transform: scale(1.08);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
         }
 
         .racket-preview::after {
@@ -313,9 +327,52 @@
             bottom: -20px;
             left: 50%;
             transform: translateX(-50%);
-            width: 4px;
+            width: 5px;
             height: 25px;
             background: #8b4513;
+            border-radius: 2px;
+        }
+
+        .racket-info {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 2px;
+            margin-top: 8px;
+        }
+
+        .racket-color-badge {
+            font-size: 11px;
+            font-weight: 600;
+            color: #666;
+            padding: 3px 8px;
+            background: #e9ecef;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.2s;
+            user-select: none;
+        }
+
+        .racket-color-badge:hover {
+            background: #dee2e6;
+            transform: translateY(-1px);
+        }
+
+        .racket-type-badge {
+            font-size: 10px;
+            font-weight: 500;
+            color: #999;
+            padding: 2px 6px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+            user-select: none;
+        }
+
+        .racket-type-badge:hover {
+            background: #e9ecef;
+            color: #666;
         }
 
         svg {
@@ -660,33 +717,27 @@
         </div>
 
         <div class="racket-config">
-            <h3>🏓 Racket Configuration</h3>
+            <h3>🏓 Racket Configuration <span style="font-size: 11px; font-weight: normal; color: #999;">(click to change)</span></h3>
             <div class="racket-options">
                 <div class="racket-side">
                     <div class="racket-side-label">Forehand</div>
-                    <select id="forehandColor">
-                        <option value="#dc2626">Red</option>
-                        <option value="#000000">Black</option>
-                    </select>
-                    <select id="forehandType">
-                        <option value="normal">Normal Rubber</option>
-                        <option value="pimples">Pimples</option>
-                        <option value="antispin">Antispin</option>
-                    </select>
-                    <div class="racket-preview" id="forehandPreview" style="background: #dc2626;"></div>
+                    <div class="racket-preview-container">
+                        <div class="racket-preview" id="forehandPreview" style="background: #dc2626;" title="Click to change"></div>
+                        <div class="racket-info">
+                            <div class="racket-color-badge" id="forehandColorBadge">Red</div>
+                            <div class="racket-type-badge" id="forehandTypeBadge">Normal</div>
+                        </div>
+                    </div>
                 </div>
                 <div class="racket-side">
                     <div class="racket-side-label">Backhand</div>
-                    <select id="backhandColor">
-                        <option value="#000000">Black</option>
-                        <option value="#dc2626">Red</option>
-                    </select>
-                    <select id="backhandType">
-                        <option value="normal">Normal Rubber</option>
-                        <option value="pimples">Pimples</option>
-                        <option value="antispin">Antispin</option>
-                    </select>
-                    <div class="racket-preview" id="backhandPreview" style="background: #000000;"></div>
+                    <div class="racket-preview-container">
+                        <div class="racket-preview" id="backhandPreview" style="background: #000000;" title="Click to change"></div>
+                        <div class="racket-info">
+                            <div class="racket-color-badge" id="backhandColorBadge">Black</div>
+                            <div class="racket-type-badge" id="backhandTypeBadge">Normal</div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -801,16 +852,34 @@
         const opponentRacket = document.getElementById('opponentRacket');
         const opponentArmRight = document.getElementById('opponentArmRight');
         const opponentArmLeft = document.getElementById('opponentArmLeft');
-        const forehandColorSelect = document.getElementById('forehandColor');
-        const forehandTypeSelect = document.getElementById('forehandType');
-        const backhandColorSelect = document.getElementById('backhandColor');
-        const backhandTypeSelect = document.getElementById('backhandType');
         const forehandPreview = document.getElementById('forehandPreview');
         const backhandPreview = document.getElementById('backhandPreview');
+        const forehandColorBadge = document.getElementById('forehandColorBadge');
+        const forehandTypeBadge = document.getElementById('forehandTypeBadge');
+        const backhandColorBadge = document.getElementById('backhandColorBadge');
+        const backhandTypeBadge = document.getElementById('backhandTypeBadge');
 
         let opponentHand = 'right';
         let isDraggingOpponent = false;
         let dragStartX = 0;
+
+        // Racket configuration state
+        let racketConfig = {
+            forehand: { color: '#dc2626', colorName: 'Red', type: 'normal', typeName: 'Normal' },
+            backhand: { color: '#000000', colorName: 'Black', type: 'normal', typeName: 'Normal' }
+        };
+
+        const colorOptions = [
+            { value: '#dc2626', name: 'Red' },
+            { value: '#000000', name: 'Black' }
+        ];
+
+        const typeOptions = [
+            { value: 'normal', name: 'Normal' },
+            { value: 'short-pimples', name: 'Short Pimples' },
+            { value: 'long-pimples', name: 'Long Pimples' },
+            { value: 'antispin', name: 'Antispin' }
+        ];
 
         // Player toggle
         playerButtons.forEach(btn => {
@@ -821,42 +890,82 @@
             });
         });
 
-        // Racket preview updates
+        // Racket configuration functions
         function updateRacketPreview(side) {
-            const colorSelect = side === 'forehand' ? forehandColorSelect : backhandColorSelect;
-            const typeSelect = side === 'forehand' ? forehandTypeSelect : backhandTypeSelect;
+            const config = racketConfig[side];
             const preview = side === 'forehand' ? forehandPreview : backhandPreview;
+            const colorBadge = side === 'forehand' ? forehandColorBadge : backhandColorBadge;
+            const typeBadge = side === 'forehand' ? forehandTypeBadge : backhandTypeBadge;
 
-            const color = colorSelect.value;
-            const type = typeSelect.value;
-
-            preview.style.background = color;
+            preview.style.background = config.color;
+            colorBadge.textContent = config.colorName;
+            typeBadge.textContent = config.typeName;
 
             // Add texture based on type
-            if (type === 'pimples') {
-                // For pimples, add visible dots - use white dots for darker colors
-                const isDark = color === '#000000';
-                const dotColor = isDark ? 'rgba(255,255,255,0.4)' : 'rgba(0,0,0,0.3)';
-                preview.style.backgroundImage = `radial-gradient(circle, ${dotColor} 1.5px, transparent 1.5px)`;
-                preview.style.backgroundSize = '6px 6px';
+            const isDark = config.color === '#000000';
+            const dotColor = isDark ? 'rgba(255,255,255,0.4)' : 'rgba(0,0,0,0.3)';
+
+            if (config.type === 'short-pimples') {
+                // Short pimples: small, tightly packed dots
+                preview.style.backgroundImage = `radial-gradient(circle, ${dotColor} 1px, transparent 1px)`;
+                preview.style.backgroundSize = '4px 4px';
                 preview.style.opacity = '1';
-            } else if (type === 'antispin') {
-                // Antispin has matte finish - slightly lower opacity
+                preview.style.filter = 'none';
+            } else if (config.type === 'long-pimples') {
+                // Long pimples: larger, more spaced out dots
+                preview.style.backgroundImage = `radial-gradient(circle, ${dotColor} 2px, transparent 2px)`;
+                preview.style.backgroundSize = '8px 8px';
+                preview.style.opacity = '1';
+                preview.style.filter = 'none';
+            } else if (config.type === 'antispin') {
+                // Antispin: matte finish, no texture
                 preview.style.backgroundImage = 'none';
                 preview.style.opacity = '0.8';
                 preview.style.filter = 'brightness(0.9)';
             } else {
-                // Normal rubber - shiny finish
+                // Normal: shiny finish
                 preview.style.backgroundImage = 'none';
                 preview.style.opacity = '1';
                 preview.style.filter = 'none';
             }
+
+            // Update opponent racket if it's forehand
+            if (side === 'forehand') {
+                updateOpponentRacketColor();
+            }
         }
 
-        forehandColorSelect.addEventListener('change', () => updateRacketPreview('forehand'));
-        forehandTypeSelect.addEventListener('change', () => updateRacketPreview('forehand'));
-        backhandColorSelect.addEventListener('change', () => updateRacketPreview('backhand'));
-        backhandTypeSelect.addEventListener('change', () => updateRacketPreview('backhand'));
+        function cycleColor(side) {
+            const config = racketConfig[side];
+            const currentIndex = colorOptions.findIndex(opt => opt.value === config.color);
+            const nextIndex = (currentIndex + 1) % colorOptions.length;
+            config.color = colorOptions[nextIndex].value;
+            config.colorName = colorOptions[nextIndex].name;
+            updateRacketPreview(side);
+        }
+
+        function cycleType(side) {
+            const config = racketConfig[side];
+            const currentIndex = typeOptions.findIndex(opt => opt.value === config.type);
+            const nextIndex = (currentIndex + 1) % typeOptions.length;
+            config.type = typeOptions[nextIndex].value;
+            config.typeName = typeOptions[nextIndex].name;
+            updateRacketPreview(side);
+        }
+
+        // Racket click handlers
+        forehandPreview.addEventListener('click', () => cycleColor('forehand'));
+        backhandPreview.addEventListener('click', () => cycleColor('backhand'));
+        forehandColorBadge.addEventListener('click', () => cycleColor('forehand'));
+        backhandColorBadge.addEventListener('click', () => cycleColor('backhand'));
+        forehandTypeBadge.addEventListener('click', (e) => {
+            e.stopPropagation();
+            cycleType('forehand');
+        });
+        backhandTypeBadge.addEventListener('click', (e) => {
+            e.stopPropagation();
+            cycleType('backhand');
+        });
 
         // Opponent hand toggle and dragging
         function updateOpponentHand() {
@@ -880,12 +989,8 @@
 
         function updateOpponentRacketColor() {
             // Use forehand color for opponent's racket
-            const color = forehandColorSelect.value;
-            opponentRacket.style.background = color;
+            opponentRacket.style.background = racketConfig.forehand.color;
         }
-
-        // Update opponent racket when forehand color changes
-        forehandColorSelect.addEventListener('change', updateOpponentRacketColor);
 
         // Opponent interaction: click to toggle hand, drag to move position
         opponentContainer.addEventListener('mousedown', (e) => {
