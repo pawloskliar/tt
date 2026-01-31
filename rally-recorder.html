@@ -24,6 +24,9 @@
             --panel-border: rgba(255, 255, 255, 0.4);
             --shadow-color: rgba(0, 0, 0, 0.15);
             --shadow-color-strong: rgba(0, 0, 0, 0.25);
+            --table-bg-start: #1e7d32;
+            --table-bg-end: #165c26;
+            --table-border: #0d3d1a;
         }
 
         body.dark-mode {
@@ -39,6 +42,9 @@
             --panel-border: rgba(255, 255, 255, 0.1);
             --shadow-color: rgba(0, 0, 0, 0.3);
             --shadow-color-strong: rgba(0, 0, 0, 0.5);
+            --table-bg-start: #1e40af;
+            --table-bg-end: #1e3a8a;
+            --table-border: #1e3a8a;
         }
 
         body {
@@ -138,13 +144,13 @@
             max-width: 500px;
             flex-shrink: 0;
             aspect-ratio: 1.525/2.74;
-            background: linear-gradient(180deg, #1e7d32 0%, #165c26 100%);
-            border: 4px solid #0d3d1a;
-            border-radius: 16px;
+            background: linear-gradient(180deg, var(--table-bg-start) 0%, var(--table-bg-end) 100%);
+            border: 4px solid var(--table-border);
+            border-radius: 0;
             cursor: crosshair;
             box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25), 0 4px 12px rgba(0, 0, 0, 0.15);
             transform-origin: left center;
-            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), background 0.3s ease, border-color 0.3s ease;
         }
 
         .table-wrapper {
