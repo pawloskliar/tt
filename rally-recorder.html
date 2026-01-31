@@ -883,8 +883,8 @@
         }
 
         scaleUpBtn.addEventListener('click', () => {
-            if (tableScale < 2.0) {
-                tableScale = Math.min(2.0, tableScale + 0.1);
+            if (tableScale < 1.0) {
+                tableScale = Math.min(1.0, tableScale + 0.1);
                 updateTableScale();
             }
         });
