@@ -752,30 +752,47 @@
 
         .spin-indicator {
             position: absolute;
-            width: 36px;
-            height: 36px;
+            width: 44px;
+            height: 44px;
             transform: translate(-50%, -50%);
             pointer-events: none;
-            filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.5));
+            filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.6));
             animation: spinPulse 2s ease-in-out infinite;
         }
 
+        .spin-indicator::before {
+            content: '';
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            background: radial-gradient(circle, rgba(0, 0, 0, 0.6) 0%, rgba(0, 0, 0, 0.4) 50%, transparent 70%);
+            border-radius: 50%;
+            z-index: -1;
+        }
+
         @keyframes spinPulse {
-            0%, 100% { opacity: 0.9; transform: translate(-50%, -50%) scale(1); }
-            50% { opacity: 1; transform: translate(-50%, -50%) scale(1.1); }
+            0%, 100% { opacity: 0.95; transform: translate(-50%, -50%) scale(1); }
+            50% { opacity: 1; transform: translate(-50%, -50%) scale(1.12); }
         }
 
         .spin-arc {
             fill: none;
-            stroke: rgba(255, 255, 255, 0.95);
-            stroke-width: 2.8;
+            stroke: #ffffff;
+            stroke-width: 3.5;
             stroke-linecap: round;
-            filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6));
+        }
+
+        .spin-arc-outline {
+            fill: none;
+            stroke: rgba(0, 0, 0, 0.8);
+            stroke-width: 5;
+            stroke-linecap: round;
         }
 
         .spin-arc-arrow {
-            fill: rgba(255, 255, 255, 0.95);
-            filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6));
+            fill: #ffffff;
+            stroke: rgba(0, 0, 0, 0.8);
+            stroke-width: 1;
         }
 
         .shot-list {
@@ -1759,49 +1776,55 @@
             container.className = 'spin-indicator';
 
             const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-            svg.setAttribute('viewBox', '0 0 36 36');
-            svg.setAttribute('width', '36');
-            svg.setAttribute('height', '36');
+            svg.setAttribute('viewBox', '0 0 44 44');
+            svg.setAttribute('width', '44');
+            svg.setAttribute('height', '44');
 
             let arcPath, arrowPath;
 
             switch(spin) {
                 case 'topspin':
                     // Forward rotating arc (top to bottom, curving forward) - clockwise
-                    arcPath = 'M 10 14 Q 18 8, 26 14';
-                    arrowPath = 'M 26 14 L 28 11 L 25 9 Z';
+                    arcPath = 'M 12 17 Q 22 10, 32 17';
+                    arrowPath = 'M 32 17 L 34 13 L 30 11 Z';
                     break;
 
                 case 'backspin':
                     // Backward rotating arc (bottom to top, curving backward) - counterclockwise
-                    arcPath = 'M 26 22 Q 18 28, 10 22';
-                    arrowPath = 'M 10 22 L 8 25 L 11 27 Z';
+                    arcPath = 'M 32 27 Q 22 34, 12 27';
+                    arrowPath = 'M 12 27 L 10 31 L 14 33 Z';
                     break;
 
                 case 'sidespin-left':
                     // Left curving arc - counterclockwise from top
-                    arcPath = 'M 22 10 Q 18 18, 22 26';
-                    arrowPath = 'M 22 26 L 19 28 L 18 25 Z';
+                    arcPath = 'M 27 12 Q 22 22, 27 32';
+                    arrowPath = 'M 27 32 L 23 34 L 22 30 Z';
                     break;
 
                 case 'sidespin-right':
                     // Right curving arc - clockwise from bottom
-                    arcPath = 'M 14 26 Q 18 18, 14 10';
-                    arrowPath = 'M 14 10 L 11 8 L 17 8 Z';
+                    arcPath = 'M 17 32 Q 22 22, 17 12';
+                    arrowPath = 'M 17 12 L 13 10 L 21 10 Z';
                     break;
 
                 case 'no-spin':
                     // Straight arrow
-                    arcPath = 'M 10 18 L 26 18';
-                    arrowPath = 'M 26 18 L 22 16 L 22 20 Z';
+                    arcPath = 'M 12 22 L 32 22';
+                    arrowPath = 'M 32 22 L 27 19 L 27 25 Z';
                     break;
 
                 default:
-                    arcPath = 'M 10 18 L 26 18';
-                    arrowPath = 'M 26 18 L 22 16 L 22 20 Z';
+                    arcPath = 'M 12 22 L 32 22';
+                    arrowPath = 'M 32 22 L 27 19 L 27 25 Z';
             }
 
-            // Create arc path
+            // Create outline arc path (darker, thicker)
+            const arcOutline = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            arcOutline.setAttribute('d', arcPath);
+            arcOutline.setAttribute('class', 'spin-arc-outline');
+            svg.appendChild(arcOutline);
+
+            // Create arc path (white, on top)
             const arc = document.createElementNS('http://www.w3.org/2000/svg', 'path');
             arc.setAttribute('d', arcPath);
             arc.setAttribute('class', 'spin-arc');
