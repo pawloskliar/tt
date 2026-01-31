@@ -40,7 +40,7 @@
             position: relative;
             width: 100%;
             max-width: 500px;
-            margin: 0 auto 24px;
+            flex-shrink: 0;
             aspect-ratio: 1.525/2.74;
             background: linear-gradient(180deg, #1e7d32 0%, #165c26 100%);
             border: 4px solid #0d3d1a;
@@ -51,15 +51,23 @@
             transition: transform 0.3s ease;
         }
 
+        .table-wrapper {
+            display: flex;
+            align-items: flex-start;
+            justify-content: center;
+            gap: 20px;
+            margin-bottom: 24px;
+        }
+
         .scale-control {
             display: flex;
+            flex-direction: column;
             align-items: center;
-            justify-content: center;
             gap: 12px;
-            margin-bottom: 16px;
             padding: 12px;
             background: #f8f9fa;
             border-radius: 12px;
+            align-self: center;
         }
 
         .scale-btn {
@@ -85,10 +93,9 @@
         }
 
         .scale-label {
-            font-size: 13px;
+            font-size: 11px;
             font-weight: 600;
             color: #666;
-            min-width: 60px;
             text-align: center;
         }
 
@@ -681,12 +688,6 @@
     <div class="container">
         <h1>🏓 Rally Recorder - PoC</h1>
 
-        <div class="scale-control">
-            <button class="scale-btn" id="scaleDown" title="Zoom out">−</button>
-            <div class="scale-label" id="scaleLabel">100%</div>
-            <button class="scale-btn" id="scaleUp" title="Zoom in">+</button>
-        </div>
-
         <div class="racket-config">
             <h3>🏓 Racket Configuration <span style="font-size: 11px; font-weight: normal; color: #999;">(click to change)</span></h3>
             <div class="racket-options">
@@ -714,8 +715,15 @@
         </div>
 
 
-        <div class="table-container" id="tableContainer">
-            <div class="opponent-container" id="opponentContainer">
+        <div class="table-wrapper">
+            <div class="scale-control">
+                <button class="scale-btn" id="scaleUp" title="Zoom in">+</button>
+                <div class="scale-label" id="scaleLabel">100%</div>
+                <button class="scale-btn" id="scaleDown" title="Zoom out">−</button>
+            </div>
+
+            <div class="table-container" id="tableContainer">
+                <div class="opponent-container" id="opponentContainer">
                 <div class="opponent-figure" id="opponentFigure">
                     <div class="opponent-head"></div>
                     <div class="opponent-body">
@@ -741,6 +749,7 @@
                     </marker>
                 </defs>
             </svg>
+            </div>
         </div>
 
         <!-- Context Menu -->
