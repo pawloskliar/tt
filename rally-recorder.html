@@ -691,16 +691,6 @@
             </div>
         </div>
 
-        <div class="racket-config">
-            <h3>👤 Opponent Settings</h3>
-            <div class="control-group">
-                <label>Dominant Hand</label>
-                <div class="player-toggle">
-                    <button class="player-btn active" data-hand="right">Right-Handed</button>
-                    <button class="player-btn" data-hand="left">Left-Handed</button>
-                </div>
-            </div>
-        </div>
 
         <div class="table-container" id="tableContainer">
             <div class="opponent-container" id="opponentContainer">
@@ -817,9 +807,10 @@
         const backhandTypeSelect = document.getElementById('backhandType');
         const forehandPreview = document.getElementById('forehandPreview');
         const backhandPreview = document.getElementById('backhandPreview');
-        const handButtons = document.querySelectorAll('[data-hand]');
 
         let opponentHand = 'right';
+        let isDraggingOpponent = false;
+        let dragStartX = 0;
 
         // Player toggle
         playerButtons.forEach(btn => {
@@ -867,17 +858,7 @@
         backhandColorSelect.addEventListener('change', () => updateRacketPreview('backhand'));
         backhandTypeSelect.addEventListener('change', () => updateRacketPreview('backhand'));
 
-        // Opponent hand toggle
-        handButtons.forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                handButtons.forEach(b => b.classList.remove('active'));
-                btn.classList.add('active');
-                opponentHand = btn.dataset.hand;
-                updateOpponentHand();
-                e.stopPropagation();
-            });
-        });
-
+        // Opponent hand toggle and dragging
         function updateOpponentHand() {
             if (opponentHand === 'left') {
                 opponentArmRight.style.display = 'none';
@@ -906,29 +887,43 @@
         // Update opponent racket when forehand color changes
         forehandColorSelect.addEventListener('change', updateOpponentRacketColor);
 
-        // Opponent position dragging
-        let isDraggingOpponent = false;
-
+        // Opponent interaction: click to toggle hand, drag to move position
         opponentContainer.addEventListener('mousedown', (e) => {
             isDraggingOpponent = true;
+            dragStartX = e.clientX;
             e.stopPropagation();
         });
 
         document.addEventListener('mousemove', (e) => {
             if (isDraggingOpponent) {
-                const rect = tableContainer.getBoundingClientRect();
-                const x = e.clientX - rect.left;
+                const dragDistance = Math.abs(e.clientX - dragStartX);
 
-                // Constrain to table width
-                const constrainedX = Math.max(30, Math.min(rect.width - 30, x));
+                // Only start dragging if moved more than 5 pixels
+                if (dragDistance > 5) {
+                    const rect = tableContainer.getBoundingClientRect();
+                    const x = e.clientX - rect.left;
 
-                opponentContainer.style.left = `${constrainedX}px`;
-                opponentContainer.style.transform = 'translateX(0)';
+                    // Constrain to table width
+                    const constrainedX = Math.max(30, Math.min(rect.width - 30, x));
+
+                    opponentContainer.style.left = `${constrainedX}px`;
+                    opponentContainer.style.transform = 'translateX(0)';
+                }
             }
         });
 
-        document.addEventListener('mouseup', () => {
-            isDraggingOpponent = false;
+        document.addEventListener('mouseup', (e) => {
+            if (isDraggingOpponent) {
+                const dragDistance = Math.abs(e.clientX - dragStartX);
+
+                // If didn't drag (clicked), toggle hand
+                if (dragDistance <= 5) {
+                    opponentHand = opponentHand === 'right' ? 'left' : 'right';
+                    updateOpponentHand();
+                }
+
+                isDraggingOpponent = false;
+            }
         });
 
         // Drag and drop handlers
