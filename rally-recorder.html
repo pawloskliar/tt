@@ -1267,7 +1267,8 @@
         let dragStartX = 0;
 
         // Table scale state
-        let tableScale = 1.0;
+        let manualScale = 1.0; // User's manual scale preference
+        let autoScale = 1.0; // Automatic scale based on window size
         const scaleUpBtn = document.getElementById('scaleUp');
         const scaleDownBtn = document.getElementById('scaleDown');
         const scaleLabel = document.getElementById('scaleLabel');
@@ -1300,25 +1301,68 @@
             return lastShot.player === 'you' ? 'opponent' : 'you';
         }
 
-        // Table scale control
-        function updateTableScale() {
-            tableContainer.style.transform = `scale(${tableScale})`;
-            scaleLabel.textContent = `${Math.round(tableScale * 100)}%`;
+        // Calculate automatic scale based on window size
+        function calculateAutoScale() {
+            const wrapper = document.querySelector('.table-wrapper');
+            if (!wrapper) return 1.0;
+
+            const wrapperRect = wrapper.getBoundingClientRect();
+            const availableWidth = wrapperRect.width - 20 - 80; // Subtract gap and scale control width
+            const availableHeight = window.innerHeight - wrapperRect.top - 100; // Leave some bottom margin
+
+            // Table's natural size
+            const tableNaturalWidth = 500; // max-width
+            const tableAspectRatio = 2.74 / 1.525; // height/width for vertical table
+            const tableNaturalHeight = tableNaturalWidth * tableAspectRatio;
+
+            // Calculate scale to fit width and height
+            const scaleByWidth = availableWidth / tableNaturalWidth;
+            const scaleByHeight = availableHeight / tableNaturalHeight;
+
+            // Use the smaller scale to ensure it fits
+            const calculatedScale = Math.min(scaleByWidth, scaleByHeight);
+
+            // Clamp between 0.3 and 1.0
+            return Math.max(0.3, Math.min(1.0, calculatedScale));
         }
 
+        // Update table scale (combines auto and manual scale)
+        function updateTableScale() {
+            const totalScale = autoScale * manualScale;
+            tableContainer.style.transform = `scale(${totalScale})`;
+            scaleLabel.textContent = `${Math.round(manualScale * 100)}%`;
+        }
+
+        // Update auto scale on window resize
+        function updateAutoScale() {
+            autoScale = calculateAutoScale();
+            updateTableScale();
+        }
+
+        // Manual scale controls
         scaleUpBtn.addEventListener('click', () => {
-            if (tableScale < 1.0) {
-                tableScale = Math.min(1.0, tableScale + 0.1);
+            if (manualScale < 1.0) {
+                manualScale = Math.min(1.0, manualScale + 0.1);
                 updateTableScale();
             }
         });
 
         scaleDownBtn.addEventListener('click', () => {
-            if (tableScale > 0.5) {
-                tableScale = Math.max(0.5, tableScale - 0.1);
+            if (manualScale > 0.5) {
+                manualScale = Math.max(0.5, manualScale - 0.1);
                 updateTableScale();
             }
         });
+
+        // Listen for window resize
+        let resizeTimeout;
+        window.addEventListener('resize', () => {
+            clearTimeout(resizeTimeout);
+            resizeTimeout = setTimeout(updateAutoScale, 100);
+        });
+
+        // Initial auto scale calculation
+        setTimeout(updateAutoScale, 100);
 
         // Racket configuration functions
         function updateRacketPreview(side) {
@@ -2171,6 +2215,11 @@
         // Initialize
         renderSavedRallies();
         updateShotList();
+
+        // Initialize auto scale after DOM is fully loaded
+        window.addEventListener('load', () => {
+            setTimeout(updateAutoScale, 200);
+        });
     </script>
 </body>
 </html>
