@@ -47,6 +47,49 @@
             border-radius: 12px;
             cursor: crosshair;
             box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+            transform-origin: center top;
+            transition: transform 0.3s ease;
+        }
+
+        .scale-control {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            margin-bottom: 16px;
+            padding: 12px;
+            background: #f8f9fa;
+            border-radius: 12px;
+        }
+
+        .scale-btn {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            border: 2px solid #667eea;
+            background: white;
+            color: #667eea;
+            font-size: 20px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .scale-btn:hover {
+            background: #667eea;
+            color: white;
+            transform: scale(1.1);
+        }
+
+        .scale-label {
+            font-size: 13px;
+            font-weight: 600;
+            color: #666;
+            min-width: 60px;
+            text-align: center;
         }
 
         .table-net {
@@ -638,6 +681,12 @@
     <div class="container">
         <h1>🏓 Rally Recorder - PoC</h1>
 
+        <div class="scale-control">
+            <button class="scale-btn" id="scaleDown" title="Zoom out">−</button>
+            <div class="scale-label" id="scaleLabel">100%</div>
+            <button class="scale-btn" id="scaleUp" title="Zoom in">+</button>
+        </div>
+
         <div class="racket-config">
             <h3>🏓 Racket Configuration <span style="font-size: 11px; font-weight: normal; color: #999;">(click to change)</span></h3>
             <div class="racket-options">
@@ -782,6 +831,12 @@
         let isDraggingOpponent = false;
         let dragStartX = 0;
 
+        // Table scale state
+        let tableScale = 1.0;
+        const scaleUpBtn = document.getElementById('scaleUp');
+        const scaleDownBtn = document.getElementById('scaleDown');
+        const scaleLabel = document.getElementById('scaleLabel');
+
         // Racket configuration state
         let racketConfig = {
             forehand: { color: '#dc2626', colorName: 'Red', type: 'normal', typeName: 'Normal' },
@@ -809,6 +864,26 @@
             const lastShot = shots[shots.length - 1];
             return lastShot.player === 'you' ? 'opponent' : 'you';
         }
+
+        // Table scale control
+        function updateTableScale() {
+            tableContainer.style.transform = `scale(${tableScale})`;
+            scaleLabel.textContent = `${Math.round(tableScale * 100)}%`;
+        }
+
+        scaleUpBtn.addEventListener('click', () => {
+            if (tableScale < 2.0) {
+                tableScale = Math.min(2.0, tableScale + 0.1);
+                updateTableScale();
+            }
+        });
+
+        scaleDownBtn.addEventListener('click', () => {
+            if (tableScale > 0.5) {
+                tableScale = Math.max(0.5, tableScale - 0.1);
+                updateTableScale();
+            }
+        });
 
         // Racket configuration functions
         function updateRacketPreview(side) {
