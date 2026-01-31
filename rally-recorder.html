@@ -12,8 +12,9 @@
         }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 50%, #f093fb 100%);
+            background-attachment: fixed;
             padding: 20px;
             min-height: 100vh;
         }
@@ -21,18 +22,24 @@
         .container {
             max-width: 1200px;
             margin: 0 auto;
-            background: white;
-            border-radius: 16px;
+            background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(20px) saturate(180%);
+            -webkit-backdrop-filter: blur(20px) saturate(180%);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 24px;
             padding: 24px;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15), 0 1px 3px rgba(0, 0, 0, 0.1);
         }
 
         h1 {
-            color: #333;
+            color: #1a1a1a;
             margin-bottom: 24px;
             display: flex;
             align-items: center;
             gap: 12px;
+            font-size: 28px;
+            font-weight: 700;
+            letter-spacing: -0.5px;
         }
 
 
@@ -44,11 +51,11 @@
             aspect-ratio: 1.525/2.74;
             background: linear-gradient(180deg, #1e7d32 0%, #165c26 100%);
             border: 4px solid #0d3d1a;
-            border-radius: 12px;
+            border-radius: 16px;
             cursor: crosshair;
-            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25), 0 4px 12px rgba(0, 0, 0, 0.15);
             transform-origin: left center;
-            transition: transform 0.3s ease;
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         }
 
         .table-wrapper {
@@ -65,33 +72,44 @@
             align-items: center;
             gap: 12px;
             padding: 12px;
-            background: #f8f9fa;
-            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.5);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 16px;
             align-self: center;
             z-index: 200;
             position: relative;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
         }
 
         .scale-btn {
-            width: 36px;
-            height: 36px;
+            width: 40px;
+            height: 40px;
             border-radius: 50%;
-            border: 2px solid #667eea;
-            background: white;
+            border: 2px solid rgba(102, 126, 234, 0.4);
+            background: rgba(255, 255, 255, 0.9);
             color: #667eea;
             font-size: 20px;
             font-weight: bold;
             cursor: pointer;
-            transition: all 0.2s;
+            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
             display: flex;
             align-items: center;
             justify-content: center;
+            box-shadow: 0 2px 8px rgba(102, 126, 234, 0.15);
         }
 
         .scale-btn:hover {
             background: #667eea;
             color: white;
-            transform: scale(1.1);
+            transform: scale(1.15);
+            box-shadow: 0 4px 16px rgba(102, 126, 234, 0.3);
+            border-color: #667eea;
+        }
+
+        .scale-btn:active {
+            transform: scale(1.05);
         }
 
         .scale-label {
@@ -167,11 +185,12 @@
             transform: translateX(-50%);
             cursor: move;
             z-index: 100;
-            transition: all 0.3s;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         }
 
         .opponent-container:hover {
-            transform: translateX(-50%) scale(1.05);
+            transform: translateX(-50%) scale(1.08);
+            filter: drop-shadow(0 6px 12px rgba(0, 0, 0, 0.4));
         }
 
         .opponent-figure {
@@ -259,10 +278,14 @@
         }
 
         .racket-config {
-            background: #f8f9fa;
-            padding: 16px;
-            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.5);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            padding: 18px;
+            border-radius: 16px;
             margin-bottom: 24px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
         }
 
         .racket-config h3 {
@@ -306,12 +329,17 @@
             border: 3px solid #333;
             position: relative;
             cursor: pointer;
-            transition: all 0.2s;
+            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
         }
 
         .racket-preview:hover {
-            transform: scale(1.08);
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            transform: scale(1.12) rotate(5deg);
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+        }
+
+        .racket-preview:active {
+            transform: scale(1.05) rotate(2deg);
         }
 
         .racket-preview::after {
@@ -338,34 +366,41 @@
             font-size: 11px;
             font-weight: 600;
             color: #666;
-            padding: 3px 8px;
-            background: #e9ecef;
-            border-radius: 10px;
+            padding: 4px 10px;
+            background: rgba(255, 255, 255, 0.7);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(0, 0, 0, 0.08);
+            border-radius: 12px;
             cursor: pointer;
-            transition: all 0.2s;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
             user-select: none;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
         }
 
         .racket-color-badge:hover {
-            background: #dee2e6;
-            transform: translateY(-1px);
+            background: rgba(255, 255, 255, 0.9);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
         }
 
         .racket-type-badge {
             font-size: 10px;
             font-weight: 500;
             color: #999;
-            padding: 2px 6px;
-            background: #f8f9fa;
-            border-radius: 8px;
+            padding: 3px 8px;
+            background: rgba(255, 255, 255, 0.5);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(0, 0, 0, 0.05);
+            border-radius: 10px;
             cursor: pointer;
-            transition: all 0.2s;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
             user-select: none;
         }
 
         .racket-type-badge:hover {
-            background: #e9ecef;
+            background: rgba(255, 255, 255, 0.8);
             color: #666;
+            transform: translateY(-1px);
         }
 
         svg {
@@ -379,22 +414,29 @@
 
         .shot-marker {
             position: absolute;
-            width: 12px;
-            height: 12px;
+            width: 14px;
+            height: 14px;
             border-radius: 50%;
-            border: 2px solid white;
+            border: 2.5px solid white;
             transform: translate(-50%, -50%);
             cursor: pointer;
             pointer-events: all;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .shot-marker:hover {
+            transform: translate(-50%, -50%) scale(1.3);
         }
 
         .shot-marker.player-you {
-            background: #3b82f6;
+            background: #2563eb;
+            box-shadow: 0 0 16px rgba(37, 99, 235, 0.6), 0 2px 12px rgba(0, 0, 0, 0.3);
         }
 
         .shot-marker.player-opponent {
-            background: #ef4444;
+            background: #dc2626;
+            box-shadow: 0 0 16px rgba(220, 38, 38, 0.6), 0 2px 12px rgba(0, 0, 0, 0.3);
         }
 
         .shot-number {
@@ -446,10 +488,20 @@
             display: flex;
             align-items: center;
             gap: 12px;
-            padding: 12px;
-            background: #f8f9fa;
-            border-radius: 8px;
+            padding: 14px;
+            background: rgba(255, 255, 255, 0.5);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 12px;
             margin-bottom: 8px;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
+        }
+
+        .shot-item:hover {
+            transform: translateX(4px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
         }
 
         .shot-item-number {
@@ -491,31 +543,39 @@
         .btn {
             padding: 12px 24px;
             border: none;
-            border-radius: 8px;
+            border-radius: 12px;
             font-weight: 600;
             font-size: 14px;
             cursor: pointer;
-            transition: all 0.2s;
+            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
         }
 
         .btn-primary {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
+            border: 1px solid rgba(255, 255, 255, 0.2);
         }
 
         .btn-primary:hover {
             transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-primary:active {
+            transform: translateY(0);
         }
 
         .btn-secondary {
-            background: white;
+            background: rgba(255, 255, 255, 0.8);
             color: #667eea;
             border: 2px solid #667eea;
+            backdrop-filter: blur(10px);
         }
 
         .btn-secondary:hover {
-            background: #f0f4ff;
+            background: rgba(240, 244, 255, 0.9);
+            transform: translateY(-1px);
         }
 
         .btn-danger {
@@ -525,6 +585,8 @@
 
         .btn-danger:hover {
             background: #dc2626;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 16px rgba(239, 68, 68, 0.4);
         }
 
         .info-box {
@@ -539,10 +601,13 @@
 
         .context-menu {
             position: fixed;
-            background: white;
-            border-radius: 12px;
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-            padding: 16px;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(20px) saturate(180%);
+            -webkit-backdrop-filter: blur(20px) saturate(180%);
+            border: 1px solid rgba(255, 255, 255, 0.5);
+            border-radius: 16px;
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.2), 0 4px 12px rgba(0, 0, 0, 0.1);
+            padding: 18px;
             z-index: 1000;
             display: none;
             min-width: 280px;
@@ -578,19 +643,21 @@
         }
 
         .context-menu-btn {
-            padding: 8px 12px;
-            border: 2px solid #e0e0e0;
-            background: white;
-            border-radius: 6px;
+            padding: 10px 14px;
+            border: 2px solid rgba(224, 224, 224, 0.6);
+            background: rgba(255, 255, 255, 0.6);
+            border-radius: 8px;
             cursor: pointer;
             font-size: 13px;
             text-align: left;
-            transition: all 0.2s;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            backdrop-filter: blur(10px);
         }
 
         .context-menu-btn:hover {
             border-color: #667eea;
-            background: #f0f4ff;
+            background: rgba(240, 244, 255, 0.8);
+            transform: translateX(2px);
         }
 
         .context-menu-btn.selected {
@@ -598,6 +665,7 @@
             background: #667eea;
             color: white;
             font-weight: 600;
+            box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
         }
 
         .context-menu-actions {
@@ -655,17 +723,22 @@
         }
 
         .rally-card {
-            background: #f8f9fa;
+            background: rgba(255, 255, 255, 0.5);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.4);
             padding: 16px;
             border-radius: 12px;
             margin-bottom: 12px;
             cursor: pointer;
-            transition: all 0.2s;
+            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
         }
 
         .rally-card:hover {
-            background: #e9ecef;
+            background: rgba(255, 255, 255, 0.7);
             transform: translateY(-2px);
+            box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
         }
 
         .rally-card-header {
