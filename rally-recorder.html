@@ -966,7 +966,7 @@
         }
 
         .preview-arrow {
-            opacity: 0.5;
+            opacity: 0.7;
             stroke-dasharray: 5, 5;
         }
 
@@ -1089,11 +1089,13 @@
             <div class="table-label you">You</div>
             <svg id="trajectorySvg" viewBox="0 0 100 100" preserveAspectRatio="none">
                 <defs>
-                    <marker id="arrowhead-blue" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
-                        <polygon points="0 0, 10 3, 0 6" fill="#3b82f6" />
+                    <marker id="arrowhead-white" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+                        <polygon points="0 0, 10 3, 0 6" fill="rgba(255, 255, 255, 0.95)"
+                                 stroke="rgba(0, 0, 0, 0.2)" stroke-width="0.3" />
                     </marker>
-                    <marker id="arrowhead-red" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
-                        <polygon points="0 0, 10 3, 0 6" fill="#ef4444" />
+                    <marker id="arrowhead-orange" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+                        <polygon points="0 0, 10 3, 0 6" fill="rgba(255, 153, 102, 0.9)"
+                                 stroke="rgba(0, 0, 0, 0.2)" stroke-width="0.3" />
                     </marker>
                 </defs>
             </svg>
@@ -1454,8 +1456,8 @@
             clearPreviewArrow();
 
             const nextPlayer = getNextPlayer();
-            const color = nextPlayer === 'you' ? '#3b82f6' : '#ef4444';
-            const marker = nextPlayer === 'you' ? 'arrowhead-blue' : 'arrowhead-red';
+            const color = nextPlayer === 'you' ? 'rgba(255, 255, 255, 0.9)' : 'rgba(255, 153, 102, 0.9)';
+            const marker = nextPlayer === 'you' ? 'arrowhead-white' : 'arrowhead-orange';
 
             const dx = dragEnd.x - dragStart.x;
             const dy = dragEnd.y - dragStart.y;
@@ -1475,9 +1477,10 @@
             path.setAttribute('class', 'preview-arrow');
             path.setAttribute('d', `M ${dragStart.x} ${dragStart.y} Q ${controlX} ${controlY} ${endX} ${endY}`);
             path.setAttribute('stroke', color);
-            path.setAttribute('stroke-width', '0.3');
+            path.setAttribute('stroke-width', '0.4');
             path.setAttribute('fill', 'none');
             path.setAttribute('marker-end', `url(#${marker})`);
+            path.setAttribute('filter', 'drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5))');
 
             trajectorySvg.appendChild(path);
         }
@@ -1611,8 +1614,8 @@
 
             // Draw each shot as a trajectory from start to end
             shots.forEach((shot, index) => {
-                const color = shot.player === 'you' ? '#3b82f6' : '#ef4444';
-                const marker = shot.player === 'you' ? 'arrowhead-blue' : 'arrowhead-red';
+                const color = shot.player === 'you' ? 'rgba(255, 255, 255, 0.95)' : 'rgba(255, 153, 102, 0.9)';
+                const marker = shot.player === 'you' ? 'arrowhead-white' : 'arrowhead-orange';
 
                 // Calculate direction vector for arrow adjustment
                 const dx = shot.x - shot.startX;
@@ -1639,6 +1642,7 @@
                 path.setAttribute('fill', 'none');
                 path.setAttribute('marker-end', `url(#${marker})`);
                 path.setAttribute('opacity', '0.85');
+                path.setAttribute('filter', 'drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5))');
                 if (strokeDashArray !== 'none') {
                     path.setAttribute('stroke-dasharray', strokeDashArray);
                 }
@@ -1680,11 +1684,14 @@
         function updateShotList() {
             const listHtml = shots.map((shot, index) => {
                 const spinEmoji = getSpinEmoji(shot.spin);
-                const color = shot.player === 'you' ? '#3b82f6' : '#ef4444';
+                const color = shot.player === 'you' ?
+                    'radial-gradient(circle at 35% 35%, #ffffff, #e8e8e8)' :
+                    'radial-gradient(circle at 35% 35%, #ff9966, #ff5500)';
+                const borderColor = shot.player === 'you' ? '#cccccc' : '#cc4400';
 
                 return `
                     <div class="shot-item">
-                        <div class="shot-item-number" style="background: ${color};">${index + 1}</div>
+                        <div class="shot-item-number" style="background: ${color}; border: 2px solid ${borderColor}; box-shadow: 0 2px 4px rgba(0,0,0,0.2), inset -1px -1px 2px rgba(0,0,0,0.15), inset 1px 1px 2px rgba(255,255,255,0.5); color: ${shot.player === 'you' ? '#333' : '#fff'};">${index + 1}</div>
                         <div class="shot-item-details">
                             <strong>${shot.player === 'you' ? 'You' : 'Opponent'}</strong>:
                             ${shot.shotType} ${spinEmoji}
@@ -1713,17 +1720,17 @@
         // Using smaller values for percentage-based coordinate system (viewBox 0-100)
         function getStrokeWidth(shotType) {
             const widths = {
-                'serve': 0.4,
-                'smash': 0.6,
-                'loop': 0.5,
-                'drive': 0.4,
-                'push': 0.3,
-                'block': 0.3,
-                'lob': 0.3,
-                'drop': 0.2,
-                'flip': 0.3
+                'serve': 0.5,
+                'smash': 0.7,
+                'loop': 0.6,
+                'drive': 0.5,
+                'push': 0.4,
+                'block': 0.4,
+                'lob': 0.4,
+                'drop': 0.3,
+                'flip': 0.4
             };
-            return widths[shotType] || 0.3;
+            return widths[shotType] || 0.4;
         }
 
         // Delete shot
