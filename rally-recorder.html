@@ -750,20 +750,30 @@
 
         .spin-indicator {
             position: absolute;
-            font-size: 24px;
+            width: 36px;
+            height: 36px;
             transform: translate(-50%, -50%);
             pointer-events: none;
-            filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.6));
+            filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.5));
             animation: spinPulse 2s ease-in-out infinite;
-            background: rgba(0, 0, 0, 0.7);
-            padding: 4px 8px;
-            border-radius: 6px;
-            border: 2px solid rgba(255, 255, 255, 0.8);
         }
 
         @keyframes spinPulse {
-            0%, 100% { opacity: 0.95; }
-            50% { opacity: 1; transform: translate(-50%, -50%) scale(1.08); }
+            0%, 100% { opacity: 0.9; transform: translate(-50%, -50%) scale(1); }
+            50% { opacity: 1; transform: translate(-50%, -50%) scale(1.1); }
+        }
+
+        .spin-arc {
+            fill: none;
+            stroke: rgba(255, 255, 255, 0.95);
+            stroke-width: 2.8;
+            stroke-linecap: round;
+            filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6));
+        }
+
+        .spin-arc-arrow {
+            fill: rgba(255, 255, 255, 0.95);
+            filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6));
         }
 
         .shot-list {
@@ -1686,15 +1696,10 @@
 
                 trajectorySvg.appendChild(path);
 
-                // Add spin indicator at midpoint of trajectory
-                const spinEmoji = getSpinEmoji(shot.spin);
-
-                const spinIndicator = document.createElement('div');
-                spinIndicator.className = 'spin-indicator';
-                spinIndicator.textContent = spinEmoji;
+                // Add spin indicator arc at midpoint of trajectory
+                const spinIndicator = createSpinIndicator(shot.spin);
                 spinIndicator.style.left = `${controlX}%`;
                 spinIndicator.style.top = `${controlY - 2}%`;
-                spinIndicator.style.color = '#fbbf24';
                 spinIndicator.title = shot.spin.replace('-', ' ');
                 tableContainer.appendChild(spinIndicator);
 
@@ -1710,10 +1715,22 @@
             });
         }
 
+        // Get spin label for shot list
+        function getSpinLabel(spin) {
+            const labels = {
+                'topspin': '↻ Topspin',
+                'backspin': '↺ Backspin',
+                'sidespin-left': '⟲ Left',
+                'sidespin-right': '⟳ Right',
+                'no-spin': '→ Flat'
+            };
+            return labels[spin] || spin;
+        }
+
         // Update shot list
         function updateShotList() {
             const listHtml = shots.map((shot, index) => {
-                const spinEmoji = getSpinEmoji(shot.spin);
+                const spinLabel = getSpinLabel(shot.spin);
                 const color = shot.player === 'you' ?
                     'radial-gradient(circle at 35% 35%, #ffffff, #e8e8e8)' :
                     'radial-gradient(circle at 35% 35%, #ff9966, #ff5500)';
@@ -1724,7 +1741,7 @@
                         <div class="shot-item-number" style="background: ${color}; border: 2px solid ${borderColor}; box-shadow: 0 2px 4px rgba(0,0,0,0.2), inset -1px -1px 2px rgba(0,0,0,0.15), inset 1px 1px 2px rgba(255,255,255,0.5); color: ${shot.player === 'you' ? '#333' : '#fff'};">${index + 1}</div>
                         <div class="shot-item-details">
                             <strong>${shot.player === 'you' ? 'You' : 'Opponent'}</strong>:
-                            ${shot.shotType} ${spinEmoji}
+                            ${shot.shotType} <span style="color: var(--text-tertiary); font-size: 12px;">${spinLabel}</span>
                         </div>
                         <div class="shot-item-delete" onclick="deleteShot(${shot.id})">×</div>
                     </div>
@@ -1734,16 +1751,68 @@
             shotListElement.innerHTML = `<h3>Shots in Rally (<span id="shotCount">${shots.length}</span>)</h3>` + listHtml;
         }
 
-        // Get spin emoji
-        function getSpinEmoji(spin) {
-            const emojis = {
-                'topspin': '⤴️',
-                'backspin': '⤵️',
-                'sidespin-left': '↪️',
-                'sidespin-right': '↩️',
-                'no-spin': '➡️'
-            };
-            return emojis[spin] || '➡️';
+        // Create spin indicator with arc
+        function createSpinIndicator(spin) {
+            const container = document.createElement('div');
+            container.className = 'spin-indicator';
+
+            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            svg.setAttribute('viewBox', '0 0 36 36');
+            svg.setAttribute('width', '36');
+            svg.setAttribute('height', '36');
+
+            let arcPath, arrowPath;
+
+            switch(spin) {
+                case 'topspin':
+                    // Forward rotating arc (top to bottom, curving forward) - clockwise
+                    arcPath = 'M 10 14 Q 18 8, 26 14';
+                    arrowPath = 'M 26 14 L 28 11 L 25 9 Z';
+                    break;
+
+                case 'backspin':
+                    // Backward rotating arc (bottom to top, curving backward) - counterclockwise
+                    arcPath = 'M 26 22 Q 18 28, 10 22';
+                    arrowPath = 'M 10 22 L 8 25 L 11 27 Z';
+                    break;
+
+                case 'sidespin-left':
+                    // Left curving arc - counterclockwise from top
+                    arcPath = 'M 22 10 Q 18 18, 22 26';
+                    arrowPath = 'M 22 26 L 19 28 L 18 25 Z';
+                    break;
+
+                case 'sidespin-right':
+                    // Right curving arc - clockwise from bottom
+                    arcPath = 'M 14 26 Q 18 18, 14 10';
+                    arrowPath = 'M 14 10 L 11 8 L 17 8 Z';
+                    break;
+
+                case 'no-spin':
+                    // Straight arrow
+                    arcPath = 'M 10 18 L 26 18';
+                    arrowPath = 'M 26 18 L 22 16 L 22 20 Z';
+                    break;
+
+                default:
+                    arcPath = 'M 10 18 L 26 18';
+                    arrowPath = 'M 26 18 L 22 16 L 22 20 Z';
+            }
+
+            // Create arc path
+            const arc = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            arc.setAttribute('d', arcPath);
+            arc.setAttribute('class', 'spin-arc');
+            svg.appendChild(arc);
+
+            // Create arrowhead
+            const arrow = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            arrow.setAttribute('d', arrowPath);
+            arrow.setAttribute('class', 'spin-arc-arrow');
+            svg.appendChild(arrow);
+
+            container.appendChild(svg);
+            return container;
         }
 
         // Get stroke width based on shot type
