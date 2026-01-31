@@ -35,65 +35,6 @@
             gap: 12px;
         }
 
-        .controls {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 16px;
-            margin-bottom: 24px;
-            padding: 20px;
-            background: #f8f9fa;
-            border-radius: 12px;
-        }
-
-        .control-group {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-        }
-
-        label {
-            font-size: 12px;
-            font-weight: 600;
-            color: #666;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-
-        select, input {
-            padding: 10px;
-            border: 2px solid #e0e0e0;
-            border-radius: 8px;
-            font-size: 14px;
-            font-family: inherit;
-            transition: all 0.2s;
-        }
-
-        select:focus, input:focus {
-            outline: none;
-            border-color: #667eea;
-        }
-
-        .player-toggle {
-            display: flex;
-            gap: 8px;
-        }
-
-        .player-btn {
-            flex: 1;
-            padding: 10px;
-            border: 2px solid #e0e0e0;
-            background: white;
-            border-radius: 8px;
-            cursor: pointer;
-            font-weight: 600;
-            transition: all 0.2s;
-        }
-
-        .player-btn.active {
-            border-color: #667eea;
-            background: #667eea;
-            color: white;
-        }
 
         .table-container {
             position: relative;
@@ -697,21 +638,6 @@
     <div class="container">
         <h1>🏓 Rally Recorder - PoC</h1>
 
-        <div class="controls">
-            <div class="control-group">
-                <label>Player</label>
-                <div class="player-toggle">
-                    <button class="player-btn active" data-player="you">You</button>
-                    <button class="player-btn" data-player="opponent">Opponent</button>
-                </div>
-            </div>
-
-            <div class="control-group">
-                <label>Rally Title</label>
-                <input type="text" id="rallyTitle" placeholder="e.g., Winning serve pattern">
-            </div>
-        </div>
-
         <div class="racket-config">
             <h3>🏓 Racket Configuration <span style="font-size: 11px; font-weight: normal; color: #999;">(click to change)</span></h3>
             <div class="racket-options">
@@ -822,7 +748,6 @@
 
     <script>
         // State
-        let currentPlayer = 'you';
         let shots = [];
         let savedRallies = JSON.parse(localStorage.getItem('rallies') || '[]');
         let isDragging = false;
@@ -837,8 +762,6 @@
         const tableContainer = document.getElementById('tableContainer');
         const trajectorySvg = document.getElementById('trajectorySvg');
         const shotListElement = document.getElementById('shotList');
-        const playerButtons = document.querySelectorAll('.player-btn');
-        const rallyTitleInput = document.getElementById('rallyTitle');
         const contextMenu = document.getElementById('contextMenu');
         const shotTypeButtons = document.querySelectorAll('#shotTypeButtons .context-menu-btn');
         const spinButtons = document.querySelectorAll('#spinButtons .context-menu-btn');
@@ -877,14 +800,15 @@
             { value: 'antispin', name: 'Antispin' }
         ];
 
-        // Player toggle
-        playerButtons.forEach(btn => {
-            btn.addEventListener('click', () => {
-                playerButtons.forEach(b => b.classList.remove('active'));
-                btn.classList.add('active');
-                currentPlayer = btn.dataset.player;
-            });
-        });
+        // Auto-alternate player with each shot (realistic rally behavior)
+        function getNextPlayer() {
+            if (shots.length === 0) {
+                return 'you'; // First shot is always "you" (serve)
+            }
+            // Alternate between players
+            const lastShot = shots[shots.length - 1];
+            return lastShot.player === 'you' ? 'opponent' : 'you';
+        }
 
         // Racket configuration functions
         function updateRacketPreview(side) {
@@ -1097,8 +1021,9 @@
         function drawPreviewArrow() {
             clearPreviewArrow();
 
-            const color = currentPlayer === 'you' ? '#3b82f6' : '#ef4444';
-            const marker = currentPlayer === 'you' ? 'arrowhead-blue' : 'arrowhead-red';
+            const nextPlayer = getNextPlayer();
+            const color = nextPlayer === 'you' ? '#3b82f6' : '#ef4444';
+            const marker = nextPlayer === 'you' ? 'arrowhead-blue' : 'arrowhead-red';
 
             const dx = dragEnd.x - dragStart.x;
             const dy = dragEnd.y - dragStart.y;
@@ -1231,7 +1156,7 @@
         function addShot(dragData) {
             const shot = {
                 id: Date.now(),
-                player: currentPlayer,
+                player: getNextPlayer(),
                 shotType: selectedShotType,
                 spin: selectedSpin,
                 startX: dragData.startX,
@@ -1408,7 +1333,7 @@
                 return;
             }
 
-            const title = rallyTitleInput.value.trim() || `Rally ${savedRallies.length + 1}`;
+            const title = `Rally ${savedRallies.length + 1}`;
 
             const rally = {
                 id: Date.now(),
@@ -1423,7 +1348,6 @@
             // Clear current rally
             shots = [];
             chainMode = false;
-            rallyTitleInput.value = '';
             renderRally();
             updateShotList();
             renderSavedRallies();
@@ -1460,7 +1384,6 @@
             const rally = savedRallies.find(r => r.id === rallyId);
             if (rally) {
                 shots = [...rally.shots];
-                rallyTitleInput.value = rally.title;
                 renderRally();
                 updateShotList();
                 window.scrollTo({ top: 0, behavior: 'smooth' });
