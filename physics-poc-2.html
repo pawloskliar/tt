@@ -1,0 +1,691 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>TT Physics PoC 2</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #111;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            font-family: -apple-system, sans-serif;
+            color: #aaa;
+            gap: 10px;
+        }
+        canvas { display: block; border-radius: 8px; }
+        #info { font-size: 12px; letter-spacing: 0.3px; opacity: 0.5; }
+    </style>
+</head>
+<body>
+<canvas id="c" width="900" height="600"></canvas>
+<div id="info">click to replay</div>
+
+<script>
+'use strict';
+
+const { Engine, Bodies, Body, World, Events } = Matter;
+
+// ── Canvas ────────────────────────────────────────────────────────────────────
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+const W = canvas.width;
+const H = canvas.height;
+
+// ── World — standard gravity ──────────────────────────────────────────────────
+// Scale: 1 m = 200 px  →  g = 9.81 m/s²
+// Matter.js: dv = gravity.y × gravity.scale(0.001) × Δt(ms)
+// → gravity.y = 9.81 × 200 × 0.001 = 1.962
+const SCALE   = 200;
+const G_WORLD = 9.81 * SCALE * 0.001;   // 1.962
+
+const engine = Engine.create();
+engine.gravity.x = 0;
+engine.gravity.y = G_WORLD;
+
+// ── Collision categories ──────────────────────────────────────────────────────
+const CAT_DEFAULT = 0x0001;
+const CAT_BALL    = 0x0002;
+const CAT_RACKET  = 0x0004;
+
+// ── Table ─────────────────────────────────────────────────────────────────────
+const TABLE_W    = 548;
+const TABLE_SURF = H - 200;   // 400 — Y of playing surface
+const TABLE_SLAB = 20;
+const TABLE_X    = W / 2;     // 450
+
+const table = Bodies.rectangle(TABLE_X, TABLE_SURF + TABLE_SLAB / 2, TABLE_W, TABLE_SLAB, {
+    isStatic: true, label: 'table',
+    restitution: 0.89, friction: 0.06, frictionStatic: 0.10,
+    collisionFilter: { category: CAT_DEFAULT, mask: CAT_BALL },
+});
+
+// ── Net ───────────────────────────────────────────────────────────────────────
+// Real net: 15.25 cm high → 31 px at 200 px/m; sits at table centre line.
+const NET_H = 31;
+const NET_W = 6;
+
+const net = Bodies.rectangle(TABLE_X, TABLE_SURF - NET_H / 2, NET_W, NET_H, {
+    isStatic: true, label: 'net',
+    restitution: 0.4, friction: 0.8,
+    collisionFilter: { category: CAT_DEFAULT, mask: CAT_BALL },
+});
+
+World.add(engine.world, [table, net]);
+
+// ── Ball ──────────────────────────────────────────────────────────────────────
+const BALL_R       = 12;
+const BALL_DENSITY = 0.0027 / (Math.PI * BALL_R * BALL_R);
+
+// Ball resting spot (left quarter of table) — also the toss start position.
+const BALL_SERVE_X = TABLE_X - TABLE_W / 2 + 80;   // 256
+const BALL_SERVE_Y = TABLE_SURF - BALL_R;            // 388
+
+function makeBall() {
+    return Bodies.circle(BALL_SERVE_X, BALL_SERVE_Y, BALL_R, {
+        label: 'ball',
+        restitution: 0.89, friction: 0.08, frictionAir: 0.004,
+        density: BALL_DENSITY,
+        collisionFilter: { category: CAT_BALL, mask: CAT_DEFAULT | CAT_RACKET },
+    });
+}
+
+let ball = makeBall();
+World.add(engine.world, ball);
+
+// ── Racket ────────────────────────────────────────────────────────────────────
+const BLADE_W  = 34;
+const BLADE_H  = 48;
+const BLADE_RX = 21;
+const BLADE_RY = 27;
+const HANDLE_W = 10;
+const HANDLE_L = 44;
+
+const LOCAL_WRIST_Y = BLADE_H / 2 + HANDLE_L;   // 24 + 44 = 68
+
+const RACKET_IDLE_X = TABLE_X - TABLE_W / 2 + 18;   // 194
+const RACKET_IDLE_Y = TABLE_SURF - 86;               // 314
+
+const racketBody = Bodies.rectangle(RACKET_IDLE_X, RACKET_IDLE_Y, BLADE_W, BLADE_H, {
+    label: 'racket',
+    density: 180,
+    restitution: 0.82,
+    friction: 0.65,
+    frictionAir: 0,
+    collisionFilter: { category: CAT_RACKET, mask: CAT_BALL },
+});
+World.add(engine.world, racketBody);
+
+// ── Arm anchor (fixed elbow) ──────────────────────────────────────────────────
+const ELBOW_X = 28;
+const ELBOW_Y = 482;
+
+function getWrist(rx, ry, ang) {
+    return {
+        x: rx + (-Math.sin(ang)) * LOCAL_WRIST_Y,
+        y: ry + ( Math.cos(ang)) * LOCAL_WRIST_Y,
+    };
+}
+
+// ── Serve animation ───────────────────────────────────────────────────────────
+//
+//  masterT: 0 → 1 over MASTER_FRAMES frames
+//
+//  0       → CONTACT_MT : toss phase — ball held in parabolic arc, racket winds up
+//  CONTACT_MT             : contact moment — ball velocity set explicitly
+//  CONTACT_MT → 0.75     : follow-through — racket sweeps down, ball flies under physics
+//  0.75 → …              : transition to 'physics' phase, racket returns to idle
+//
+const MASTER_FRAMES = 115;
+const CONTACT_MT    = 0.42;   // fraction of masterT when racket meets ball
+
+// Toss arc: ball goes from table surface (TOSS_Y) up TOSS_H px, then down to CONTACT_Y.
+const TOSS_X = BALL_SERVE_X;        // 256 — straight up and down
+const TOSS_Y = BALL_SERVE_Y;        // 388 — ball starts on table surface
+const TOSS_H = 200;                 // peak height above the straight-line lerp
+
+// Contact point: where racket face meets the falling ball (180 px above table).
+const CONTACT_X        = BALL_SERVE_X;   // 256
+const CONTACT_Y        = TABLE_SURF - 180; // 220 — higher contact → bigger bounce arcs
+const CONTACT_Y_RACKET = TABLE_SURF - 200; // 200 — racket centre 20 px above ball
+
+// Ball velocity at contact (px/frame — Matter.js velocity = position delta per tick).
+// At 60 fps, g_eff ≈ 0.001962 × 16.67² ≈ 0.545 px/frame².
+// Trajectory (friction=0.06): 1st bounce ~x=400 (server's half ✓),
+// clears net (x=450) by ~50 px ✓, 2nd bounce ~x=580 (receiver's half ✓).
+// Post-bounce arc peak ≈ 140 px (even higher arcs).
+const SERVE_VX = 5.8;   // px/frame — reduced because ball falls further before bouncing
+const SERVE_VY = 0.5;   // px/frame slight downward
+
+// Ball arc during toss: p ∈ [0, 1] maps to masterT ∈ [0, CONTACT_MT].
+function tossPos(mt) {
+    const p = Math.min(mt / CONTACT_MT, 1);
+    return {
+        x: TOSS_X + (CONTACT_X - TOSS_X) * p,
+        y: TOSS_Y + (CONTACT_Y - TOSS_Y) * p - TOSS_H * 4 * p * (1 - p),
+    };
+}
+
+// Racket keyframes indexed by masterT (not raw frame count).
+const SERVE_KFS = [
+    { t: 0.00,       x: RACKET_IDLE_X,      y: RACKET_IDLE_Y,      angle: -0.34 }, // ready
+    { t: 0.14,       x: RACKET_IDLE_X - 14, y: TABLE_SURF - 270,   angle: -0.62 }, // wind-up (above new contact)
+    { t: CONTACT_MT, x: CONTACT_X,          y: CONTACT_Y_RACKET,   angle: -0.24 }, // contact
+    { t: 0.75,       x: CONTACT_X + 118,    y: TABLE_SURF + 26,    angle: -0.04 }, // follow-through
+];
+
+function lerpKF(t) {
+    let i = 0;
+    while (i < SERVE_KFS.length - 2 && t > SERVE_KFS[i + 1].t) i++;
+    const a = SERVE_KFS[i], b = SERVE_KFS[i + 1];
+    const p = Math.min(1, Math.max(0, (t - a.t) / (b.t - a.t)));
+    const e = p < 0.5 ? 2 * p * p : -1 + (4 - 2 * p) * p;   // ease-in-out
+    return {
+        x:     a.x     + (b.x     - a.x)     * e,
+        y:     a.y     + (b.y     - a.y)     * e,
+        angle: a.angle + (b.angle - a.angle) * e,
+    };
+}
+
+// ── Spin state ────────────────────────────────────────────────────────────────
+let ballOmega    = 0;   // visual spin magnitude; negative = backspin
+let ballHit      = false;
+let ballSpinAngle = 0;  // accumulated rotation angle for stripe drawing (rad)
+
+// ── State machine ─────────────────────────────────────────────────────────────
+// 'waiting' → auto-serve after countdown
+// 'serving' → toss + swing + follow-through via masterT
+// 'physics' → Matter.js runs freely, racket returns to idle
+let phase       = 'waiting';
+let masterT     = 0;
+let prevMasterT = 0;
+let serveWait   = 60;
+
+function startServe() {
+    phase         = 'serving';
+    masterT       = 0;
+    prevMasterT   = 0;
+    ballOmega     = 0;
+    ballHit       = false;
+    ballSpinAngle = 0;
+    racketBody.collisionFilter.mask = CAT_BALL;   // re-arm for next contact
+    Body.setPosition(ball, { x: TOSS_X, y: TOSS_Y });
+    Body.setVelocity(ball, { x: 0, y: 0 });
+    Body.setAngularVelocity(ball, 0);
+}
+
+function resetAll() {
+    World.remove(engine.world, ball);
+    ball = makeBall();
+    World.add(engine.world, ball);
+    ballOmega     = 0;
+    ballHit       = false;
+    ballSpinAngle = 0;
+    phase         = 'waiting';
+    masterT       = 0;
+    serveWait     = 70;
+    racketBody.collisionFilter.mask = CAT_BALL;   // re-arm for next serve
+}
+
+// ── Physics events ────────────────────────────────────────────────────────────
+Events.on(engine, 'beforeUpdate', () => {
+    if (ballHit) {
+        ballOmega *= 0.9978;   // spin decay (visual only)
+    }
+});
+
+Events.on(engine, 'collisionStart', ({ pairs }) => {
+    pairs.forEach(({ bodyA, bodyB }) => {
+        const isTable = (bodyA === ball && bodyB === table) ||
+                        (bodyB === ball && bodyA === table);
+        if (isTable && ballHit) {
+            ballOmega *= 0.55;   // spin decays on table bounce
+        }
+    });
+});
+
+// ── Drawing ───────────────────────────────────────────────────────────────────
+
+function drawBackground() {
+    ctx.fillStyle = '#0d0d1a';
+    ctx.fillRect(0, 0, W, H);
+}
+
+function drawTable() {
+    const tx = TABLE_X - TABLE_W / 2;
+    const legW = 12, legH = 160;
+
+    // Legs
+    ctx.fillStyle = '#3a3a3a';
+    [[tx + 28, TABLE_SURF + TABLE_SLAB], [tx + TABLE_W - 28 - legW, TABLE_SURF + TABLE_SLAB]]
+        .forEach(([lx, ly]) => ctx.fillRect(lx, ly, legW, legH));
+    // Cross-brace
+    ctx.fillStyle = '#2e2e2e';
+    ctx.fillRect(tx + 28, TABLE_SURF + TABLE_SLAB + legH * 0.55, TABLE_W - 56, 6);
+    // Table slab body
+    ctx.fillStyle = '#0f3d1c';
+    ctx.fillRect(tx, TABLE_SURF + TABLE_SLAB - 4, TABLE_W, TABLE_SLAB + 4);
+
+    // Felt surface
+    const felt = ctx.createLinearGradient(0, TABLE_SURF, 0, TABLE_SURF + TABLE_SLAB);
+    felt.addColorStop(0, '#228b44');
+    felt.addColorStop(1, '#145c2a');
+    ctx.fillStyle = felt;
+    ctx.fillRect(tx, TABLE_SURF, TABLE_W, TABLE_SLAB);
+
+    // White edge line
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(tx, TABLE_SURF); ctx.lineTo(tx + TABLE_W, TABLE_SURF); ctx.stroke();
+    [[tx, TABLE_SURF], [tx + TABLE_W, TABLE_SURF]].forEach(([x, y]) => {
+        ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y + TABLE_SLAB); ctx.stroke();
+    });
+    // Centre dashed line
+    ctx.strokeStyle = 'rgba(255,255,255,0.28)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([5, 5]);
+    ctx.beginPath(); ctx.moveTo(TABLE_X, TABLE_SURF); ctx.lineTo(TABLE_X, TABLE_SURF + TABLE_SLAB); ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Floor shadow
+    const sh = ctx.createLinearGradient(0, TABLE_SURF + TABLE_SLAB + legH, 0, TABLE_SURF + TABLE_SLAB + legH + 24);
+    sh.addColorStop(0, 'rgba(0,0,0,0.30)'); sh.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = sh;
+    ctx.fillRect(tx - 10, TABLE_SURF + TABLE_SLAB + legH, TABLE_W + 20, 24);
+}
+
+function drawNet() {
+    const nx   = TABLE_X;
+    const topY = TABLE_SURF - NET_H;
+
+    // Drop shadow behind net
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.fillRect(nx - NET_W / 2 - 1, topY - 1, NET_W + 2, NET_H + 2);
+
+    // Net body — dark woven look with gradient
+    const ng = ctx.createLinearGradient(nx - NET_W / 2, 0, nx + NET_W / 2, 0);
+    ng.addColorStop(0,   '#111');
+    ng.addColorStop(0.5, '#2a2a2a');
+    ng.addColorStop(1,   '#111');
+    ctx.fillStyle = ng;
+    ctx.fillRect(nx - NET_W / 2, topY, NET_W, NET_H);
+
+    // Horizontal mesh lines (visible from side)
+    ctx.strokeStyle = 'rgba(90,90,90,0.7)';
+    ctx.lineWidth   = 0.5;
+    for (let i = 1; i <= 5; i++) {
+        const ly = topY + NET_H * (i / 6);
+        ctx.beginPath();
+        ctx.moveTo(nx - NET_W / 2, ly);
+        ctx.lineTo(nx + NET_W / 2, ly);
+        ctx.stroke();
+    }
+
+    // White top tape
+    const tg = ctx.createLinearGradient(0, topY - 3, 0, topY + 3);
+    tg.addColorStop(0,   '#fff');
+    tg.addColorStop(0.6, '#ccc');
+    tg.addColorStop(1,   '#999');
+    ctx.fillStyle = tg;
+    ctx.fillRect(nx - NET_W / 2 - 1, topY - 3, NET_W + 2, 6);
+}
+
+// ── Arm + hand ────────────────────────────────────────────────────────────────
+function drawArm(rx, ry, ang) {
+    const w = getWrist(rx, ry, ang);
+
+    ctx.save();
+    ctx.lineCap = 'round';
+
+    // Shadow/dark side
+    ctx.strokeStyle = '#9b5a30';
+    ctx.lineWidth   = 26;
+    ctx.beginPath(); ctx.moveTo(ELBOW_X, ELBOW_Y); ctx.lineTo(w.x, w.y); ctx.stroke();
+
+    // Mid skin tone
+    ctx.strokeStyle = '#c97840';
+    ctx.lineWidth   = 20;
+    ctx.beginPath(); ctx.moveTo(ELBOW_X, ELBOW_Y); ctx.lineTo(w.x, w.y); ctx.stroke();
+
+    // Highlight
+    ctx.strokeStyle = '#e09050';
+    ctx.lineWidth   = 10;
+    const ox = -3, oy = -3;
+    ctx.beginPath();
+    ctx.moveTo(ELBOW_X + ox, ELBOW_Y + oy);
+    ctx.lineTo(w.x + ox * 0.4, w.y + oy * 0.4);
+    ctx.stroke();
+
+    // Palm
+    ctx.fillStyle = '#c07040';
+    ctx.beginPath();
+    ctx.ellipse(w.x, w.y, 13, 10, ang, 0, Math.PI * 2);
+    ctx.fill();
+    // Knuckle highlight
+    ctx.fillStyle = '#d88850';
+    ctx.beginPath();
+    ctx.ellipse(w.x - Math.sin(ang) * 4, w.y + Math.cos(ang) * 4, 9, 6, ang, 0, Math.PI * 2);
+    ctx.fill();
+    // Thumb suggestion
+    ctx.strokeStyle = '#b06030';
+    ctx.lineWidth   = 5;
+    ctx.lineCap     = 'round';
+    const tx2 = w.x + Math.cos(ang) * 11, ty2 = w.y + Math.sin(ang) * 11;
+    ctx.beginPath(); ctx.moveTo(w.x, w.y); ctx.lineTo(tx2, ty2); ctx.stroke();
+
+    ctx.restore();
+}
+
+function drawRacket(rx, ry, ang) {
+    ctx.save();
+    ctx.translate(rx, ry);
+    ctx.rotate(ang);
+
+    const bh = BLADE_H, bw = BLADE_W;
+    const rx2 = BLADE_RX, ry2 = BLADE_RY;
+    const hw = HANDLE_W, hl = HANDLE_L;
+
+    // ── Handle (wood) ──
+    const hStartY = bh / 2;
+
+    const hg = ctx.createLinearGradient(-hw / 2, 0, hw / 2, 0);
+    hg.addColorStop(0,    '#5c2c0a');
+    hg.addColorStop(0.35, '#8c4c1e');
+    hg.addColorStop(0.65, '#a05c24');
+    hg.addColorStop(1,    '#5c2c0a');
+    ctx.fillStyle = hg;
+    ctx.beginPath();
+    ctx.moveTo(-hw / 2 + 2, hStartY);
+    ctx.lineTo( hw / 2 - 2, hStartY);
+    ctx.arcTo( hw / 2, hStartY,      hw / 2, hStartY + 3,      2);
+    ctx.lineTo( hw / 2, hStartY + hl - 4);
+    ctx.arcTo( hw / 2, hStartY + hl, hw / 2 - 4, hStartY + hl, 4);
+    ctx.lineTo(-hw / 2 + 4, hStartY + hl);
+    ctx.arcTo(-hw / 2, hStartY + hl, -hw / 2, hStartY + hl - 4, 4);
+    ctx.lineTo(-hw / 2, hStartY + 3);
+    ctx.arcTo(-hw / 2, hStartY,     -hw / 2 + 2, hStartY,       2);
+    ctx.closePath();
+    ctx.fill();
+
+    // Grip wrap lines
+    ctx.strokeStyle = 'rgba(0,0,0,0.20)';
+    ctx.lineWidth   = 2;
+    ctx.lineCap     = 'butt';
+    for (let i = 1; i <= 5; i++) {
+        const gy = hStartY + hl * (i / 6);
+        ctx.beginPath(); ctx.moveTo(-hw / 2 + 1, gy); ctx.lineTo(hw / 2 - 1, gy); ctx.stroke();
+    }
+
+    // ── Blade (oval) ──
+
+    // Black rubber back (slightly larger → peeks as edge)
+    ctx.fillStyle = '#1a1a1a';
+    ctx.beginPath();
+    ctx.ellipse(0, 0, rx2 + 2, ry2 + 2, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // White edge tape
+    ctx.strokeStyle = 'rgba(245,245,245,0.80)';
+    ctx.lineWidth   = 3.5;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, rx2 + 0.5, ry2 + 0.5, 0, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Red rubber face — radial gradient
+    const rg = ctx.createRadialGradient(-rx2 * 0.28, -ry2 * 0.22, rx2 * 0.05, 0, 0, rx2 * 1.1);
+    rg.addColorStop(0,    '#f04848');
+    rg.addColorStop(0.55, '#cc1c10');
+    rg.addColorStop(1,    '#880c08');
+    ctx.fillStyle = rg;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, rx2 - 1, ry2 - 1, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Pimple texture
+    ctx.save();
+    ctx.beginPath();
+    ctx.ellipse(0, 0, rx2 - 1, ry2 - 1, 0, 0, Math.PI * 2);
+    ctx.clip();
+    ctx.fillStyle = 'rgba(0,0,0,0.11)';
+    for (let px = -rx2 + 3; px <= rx2 - 3; px += 4.5) {
+        for (let py = -ry2 + 3; py <= ry2 - 3; py += 4.5) {
+            if ((px / rx2) ** 2 + (py / ry2) ** 2 < 0.88) {
+                ctx.beginPath();
+                ctx.arc(px, py, 1.1, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+    }
+    ctx.restore();
+
+    // Specular glint
+    const sg = ctx.createRadialGradient(-rx2 * 0.32, -ry2 * 0.28, 0, 0, 0, rx2);
+    sg.addColorStop(0,    'rgba(255,140,120,0.32)');
+    sg.addColorStop(0.45, 'rgba(255,60,40,0.00)');
+    ctx.fillStyle = sg;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, rx2 - 1, ry2 - 1, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+}
+
+function arrowHead(x, y, dir, size, color) {
+    ctx.save();
+    ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.lineCap = 'round';
+    ctx.translate(x, y); ctx.rotate(dir);
+    ctx.beginPath();
+    ctx.moveTo(0, 0); ctx.lineTo(-size * 0.5, -size);
+    ctx.moveTo(0, 0); ctx.lineTo( size * 0.5, -size);
+    ctx.stroke();
+    ctx.restore();
+}
+
+function drawBall(x, y, angle) {
+    // Ground shadow
+    if (y < TABLE_SURF) {
+        const dist  = TABLE_SURF - y;
+        const alpha = Math.max(0, 0.40 * (1 - dist / (H * 0.55)));
+        const sx    = Math.max(0.25, 1 - dist / 340);
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle   = '#000';
+        ctx.beginPath();
+        ctx.ellipse(x, TABLE_SURF, BALL_R * sx * 2.2, BALL_R * sx * 0.28, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+    }
+
+    // Body
+    const g = ctx.createRadialGradient(x - BALL_R * 0.30, y - BALL_R * 0.30, BALL_R * 0.04, x, y, BALL_R);
+    g.addColorStop(0, '#ffffff'); g.addColorStop(0.50, '#edeff2'); g.addColorStop(1, '#b0b8c4');
+    ctx.beginPath(); ctx.arc(x, y, BALL_R, 0, Math.PI * 2);
+    ctx.fillStyle = g; ctx.fill();
+
+    // Fixed seam — horizontal equator line, does NOT rotate (moulding seam)
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.beginPath(); ctx.arc(0, 0, BALL_R, 0, Math.PI * 2); ctx.clip();
+    ctx.strokeStyle = 'rgba(140,150,165,0.45)';
+    ctx.lineWidth   = 1.0;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, BALL_R * 0.92, BALL_R * 0.18, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+
+    // Rotating brand logo — orbits around ball centre with ballSpinAngle
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(ballSpinAngle);
+    ctx.beginPath(); ctx.arc(0, 0, BALL_R, 0, Math.PI * 2); ctx.clip();
+    // Logo oval background: centred at (BALL_R*0.40, 0) in rotated space
+    const lx = BALL_R * 0.40, ly = 0;
+    ctx.save();
+    ctx.translate(lx, ly);
+    // Red oval
+    ctx.beginPath();
+    ctx.ellipse(0, 0, BALL_R * 0.44, BALL_R * 0.27, 0, 0, Math.PI * 2);
+    ctx.fillStyle = '#d42020'; ctx.fill();
+    // White border
+    ctx.strokeStyle = 'rgba(255,255,255,0.88)'; ctx.lineWidth = 0.9;
+    ctx.stroke();
+    // Three small star dots
+    for (let i = -1; i <= 1; i++) {
+        ctx.beginPath();
+        ctx.arc(i * BALL_R * 0.13, 0, BALL_R * 0.055, 0, Math.PI * 2);
+        ctx.fillStyle = '#fff'; ctx.fill();
+    }
+    ctx.restore();
+    ctx.restore();
+
+    // Specular
+    const sp = ctx.createRadialGradient(x - BALL_R * 0.28, y - BALL_R * 0.30, 0, x, y, BALL_R);
+    sp.addColorStop(0, 'rgba(255,255,255,0.75)'); sp.addColorStop(0.35, 'rgba(255,255,255,0)');
+    ctx.beginPath(); ctx.arc(x, y, BALL_R, 0, Math.PI * 2);
+    ctx.fillStyle = sp; ctx.fill();
+
+    ctx.strokeStyle = 'rgba(90,110,135,0.40)'; ctx.lineWidth = 0.8;
+    ctx.beginPath(); ctx.arc(x, y, BALL_R, 0, Math.PI * 2); ctx.stroke();
+
+    // Spin direction ring — thick arc with arrowhead
+    if (ballHit && Math.abs(ballOmega) > 12) {
+        const alpha = Math.min(0.95, Math.abs(ballOmega) / 300);
+        const R     = BALL_R + 11;
+        const ccw   = ballOmega < 0;   // backspin = CCW arc
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.strokeStyle = '#4dd4f0';
+        ctx.lineWidth   = 2.8;
+        // Nearly full circle — gap at top-left so arrow has visual room
+        ctx.beginPath();
+        ctx.arc(x, y, R, -Math.PI * 0.65, Math.PI * 0.65, ccw);
+        ctx.stroke();
+        // Arrowhead at the tip of the arc
+        const tipAngle = ccw ? -Math.PI * 0.65 : Math.PI * 0.65;
+        const tipDir   = ccw ? tipAngle - Math.PI / 2 : tipAngle + Math.PI / 2;
+        arrowHead(x + Math.cos(tipAngle) * R, y + Math.sin(tipAngle) * R, tipDir, 7, '#4dd4f0');
+        ctx.restore();
+    }
+}
+
+function drawHUD() {
+    const vel     = ball.velocity;
+    const speed   = Math.sqrt(vel.x ** 2 + vel.y ** 2);
+    const speedMs = (speed / (SCALE * 0.001 * 16.67)).toFixed(2);
+    const heightM = Math.max(0, (TABLE_SURF - ball.position.y - BALL_R) / SCALE).toFixed(2);
+    const rpm     = Math.round(Math.abs(ballOmega) / 300 * 3200);
+
+    ctx.save();
+    ctx.font = '11px monospace'; ctx.fillStyle = 'rgba(100,140,180,0.65)';
+    ctx.fillText(`height: ${heightM} m   speed: ${speedMs} m/s   backspin: ${rpm} rpm`, 16, 22);
+    ctx.restore();
+}
+
+// ── Main loop ─────────────────────────────────────────────────────────────────
+let lastTs = performance.now();
+
+function loop(ts) {
+    const dt = Math.min(ts - lastTs, 50);
+    lastTs   = ts;
+
+    prevMasterT = masterT;
+
+    // ── Racket animation ──────────────────────────────────────────────────────
+    const prevRPos = { ...racketBody.position };
+    const curAng   = racketBody.angle;
+
+    if (phase === 'serving') {
+        masterT = Math.min(masterT + 1 / MASTER_FRAMES, 1);
+
+        // Animate racket along keyframes (clamped to follow-through end at 0.75)
+        const kf = lerpKF(Math.min(masterT, 0.75));
+        Body.setPosition(racketBody, { x: kf.x, y: kf.y });
+        Body.setAngle(racketBody, kf.angle);
+        Body.setVelocity(racketBody, { x: kf.x - prevRPos.x, y: kf.y - prevRPos.y });
+
+        // Hold ball in parabolic toss arc until contact
+        if (masterT < CONTACT_MT) {
+            const tp = tossPos(masterT);
+            Body.setPosition(ball, tp);
+            Body.setVelocity(ball, { x: 0, y: 0 });
+        }
+
+    } else {
+        // Lerp racket back to idle (both 'waiting' and 'physics' phases)
+        const ix = prevRPos.x + (RACKET_IDLE_X - prevRPos.x) * 0.07;
+        const iy = prevRPos.y + (RACKET_IDLE_Y - prevRPos.y) * 0.07;
+        const ia = curAng + (SERVE_KFS[0].angle - curAng) * 0.07;
+        Body.setPosition(racketBody, { x: ix, y: iy });
+        Body.setAngle(racketBody, ia);
+        Body.setVelocity(racketBody, { x: ix - prevRPos.x, y: iy - prevRPos.y });
+
+        if (phase === 'waiting') {
+            if (serveWait > 0) serveWait--;
+            if (serveWait === 0) startServe();
+        }
+    }
+
+    // ── Physics step ─────────────────────────────────────────────────────────
+    Engine.update(engine, dt);
+
+    // ── Post-update: override ball during toss & handle contact moment ────────
+    if (phase === 'serving') {
+        if (masterT <= CONTACT_MT) {
+            // Override engine-moved position — keep ball on toss arc
+            const tp = tossPos(masterT);
+            Body.setPosition(ball, tp);
+            Body.setVelocity(ball, { x: 0, y: 0 });
+        }
+
+        // Contact moment: set serve velocity to launch ball legally
+        if (prevMasterT < CONTACT_MT && masterT >= CONTACT_MT) {
+            Body.setVelocity(ball, { x: SERVE_VX, y: SERVE_VY });
+            Body.setAngularVelocity(ball, 0);
+            ballOmega = -300;
+            ballHit   = true;
+            // Disable racket-ball physics — heavy racket follow-through would
+            // otherwise push the ball backward through collision resolution.
+            racketBody.collisionFilter.mask = 0;
+        }
+
+        // Follow-through done → hand over to physics
+        if (masterT >= 0.75) {
+            phase = 'physics';
+        }
+    }
+
+    // Auto-reset when ball leaves the visible canvas
+    if (phase !== 'waiting' &&
+        (ball.position.y > H + 80 || ball.position.x > W + 80 || ball.position.x < -80)) {
+        resetAll();
+    }
+
+    // Accumulate spin angle for stripe rotation (scaled so one full backspin
+    // rotation takes ~20 frames when omega = -300 — clearly visible but not blurry)
+    if (ballHit) ballSpinAngle += ballOmega * 0.00105;
+
+    // ── Draw — order: arm → table → net → racket → ball ──────────────────────
+    const rp = racketBody.position;
+    const ra = racketBody.angle;
+
+    drawBackground();
+    drawArm(rp.x, rp.y, ra);     // 1. arm  — behind table surface
+    drawTable();                   // 2. table — clips arm at edge naturally
+    drawNet();                     // 3. net   — sits on table centre
+    drawRacket(rp.x, rp.y, ra);  // 4. racket — in front of table edge
+    drawBall(ball.position.x, ball.position.y, ball.angle);  // 5. ball
+    drawHUD();
+
+    requestAnimationFrame(loop);
+}
+
+requestAnimationFrame(loop);
+
+canvas.addEventListener('click', resetAll);
+</script>
+</body>
+</html>

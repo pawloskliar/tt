@@ -1,0 +1,1443 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rally Constructor</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            background: #0f0f1a;
+            color: #e0e0f0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            min-height: 100vh;
+            padding: 18px 20px;
+        }
+
+        .page-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 16px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid #2a2a4a;
+        }
+        .page-header h1 { font-size: 20px; font-weight: 700; color: #4fc3f7; }
+        .back-link { color: #4fc3f7; text-decoration: none; font-size: 13px; opacity: 0.7; transition: opacity 0.15s; }
+        .back-link:hover { opacity: 1; }
+
+        /* ── MAIN CANVAS ── */
+        #canvas-wrap {
+            border-radius: 10px;
+            overflow: hidden;
+            background: #0d0d20;
+            margin-bottom: 12px;
+        }
+        #main-canvas { display: block; width: 100%; height: auto; }
+
+        /* ── STEP INDICATOR ── */
+        #step-indicator {
+            display: flex;
+            align-items: center;
+            gap: 0;
+            margin-bottom: 14px;
+            padding: 0 4px;
+        }
+        .step-dot {
+            width: 10px; height: 10px;
+            border-radius: 50%;
+            background: #2a2a4a;
+            border: 2px solid #3a3a6a;
+            flex-shrink: 0;
+            transition: background 0.25s, border-color 0.25s;
+        }
+        .step-dot.active { background: #4fc3f7; border-color: #4fc3f7; }
+        .step-dot.done { background: #2a5a6a; border-color: #3a8a9a; }
+        .step-label {
+            font-size: 11px;
+            color: #556;
+            margin-left: 5px;
+            transition: color 0.25s;
+        }
+        .step-label.active { color: #4fc3f7; font-weight: 600; }
+        .step-label.done { color: #3a8a9a; }
+        .step-line {
+            flex: 1;
+            height: 1px;
+            background: #2a2a4a;
+            margin: 0 8px;
+        }
+
+        /* ── PANELS ── */
+        .panel {
+            background: #13132a;
+            border: 1px solid #2a2a4a;
+            border-radius: 12px;
+            padding: 16px 18px;
+        }
+        .panel-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: #8899bb;
+            margin-bottom: 12px;
+        }
+        .panel-subtitle {
+            font-size: 12px;
+            color: #556;
+            margin-bottom: 10px;
+        }
+
+        /* ── SERVE CARD GRID ── */
+        #serve-cards-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 8px;
+        }
+        .serve-card {
+            background: #0d0d20;
+            border: 2px solid #2a2a4a;
+            border-radius: 8px;
+            cursor: pointer;
+            overflow: hidden;
+            transition: border-color 0.2s, box-shadow 0.2s;
+            user-select: none;
+        }
+        .serve-card:hover { border-color: #4fc3f7; }
+        .serve-card canvas { display: block; width: 100%; height: auto; }
+        .serve-card-label {
+            padding: 4px 6px 6px;
+            font-size: 10px;
+            font-weight: 600;
+            color: #6680aa;
+            text-align: center;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        /* ── SERVE PREVIEW ── */
+        .preview-layout {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 16px;
+        }
+        .preview-info { flex: 1; }
+        .preview-title {
+            font-size: 16px;
+            font-weight: 700;
+            color: #c8e8ff;
+            margin-bottom: 6px;
+        }
+        .preview-desc {
+            font-size: 12px;
+            color: #6680aa;
+            line-height: 1.6;
+            margin-bottom: 8px;
+        }
+        .spin-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 3px 10px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.4px;
+            text-transform: uppercase;
+            background: #1a2540;
+            color: #4fc3f7;
+            border: 1px solid #2a4a6a;
+        }
+        .preview-actions {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+
+        /* ── RESPONSE BUTTONS ── */
+        #response-buttons {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        .resp-btn {
+            padding: 8px 14px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            border: 2px solid transparent;
+            transition: background 0.15s, border-color 0.15s, transform 0.1s;
+            user-select: none;
+        }
+        .resp-btn:hover { transform: translateY(-1px); }
+        .resp-btn.valid {
+            background: rgba(105, 240, 174, 0.12);
+            border-color: rgba(105, 240, 174, 0.4);
+            color: #69f0ae;
+        }
+        .resp-btn.valid:hover {
+            background: rgba(105, 240, 174, 0.22);
+            border-color: #69f0ae;
+        }
+        .resp-btn.invalid {
+            background: rgba(255, 82, 82, 0.10);
+            border-color: rgba(255, 82, 82, 0.3);
+            color: #ff7070;
+        }
+        .resp-btn.invalid:hover {
+            background: rgba(255, 82, 82, 0.18);
+            border-color: #ff5252;
+        }
+
+        /* ── RESULT PANEL ── */
+        #result-message {
+            font-size: 13px;
+            line-height: 1.6;
+            margin-bottom: 12px;
+            padding: 10px 12px;
+            border-radius: 8px;
+        }
+        #result-message.valid {
+            background: rgba(105, 240, 174, 0.08);
+            border: 1px solid rgba(105, 240, 174, 0.2);
+            color: #8fffd8;
+        }
+        #result-message.error {
+            background: rgba(255, 82, 82, 0.08);
+            border: 1px solid rgba(255, 82, 82, 0.2);
+            color: #ff8888;
+        }
+        .result-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+        .rally-count {
+            font-size: 11px;
+            color: #4a6a8a;
+            margin-bottom: 8px;
+        }
+
+        /* ── COMMON BUTTONS ── */
+        .btn-primary, .btn-secondary {
+            padding: 7px 16px;
+            border-radius: 8px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            border: 1px solid;
+            transition: background 0.15s;
+        }
+        .btn-primary {
+            background: #0d2a40;
+            border-color: #4fc3f7;
+            color: #4fc3f7;
+        }
+        .btn-primary:hover { background: #1a3a50; }
+        .btn-secondary {
+            background: #1a1a3a;
+            border-color: #2a2a5a;
+            color: #7790bb;
+        }
+        .btn-secondary:hover { background: #222250; }
+    </style>
+</head>
+<body>
+
+<div class="page-header">
+    <h1>🏓 Rally Constructor</h1>
+    <a href="spin-visualizer.html" class="back-link">← Spin Visualizer</a>
+</div>
+
+<div id="canvas-wrap">
+    <canvas id="main-canvas" width="700" height="380"></canvas>
+</div>
+
+<div id="step-indicator">
+    <span class="step-dot active" id="step-dot-0"></span>
+    <span class="step-label active" id="step-lbl-0">Serve</span>
+    <span class="step-line"></span>
+    <span class="step-dot" id="step-dot-1"></span>
+    <span class="step-label" id="step-lbl-1">Response</span>
+    <span class="step-line"></span>
+    <span class="step-dot" id="step-dot-2"></span>
+    <span class="step-label" id="step-lbl-2">Result</span>
+</div>
+
+<!-- SERVE SELECT -->
+<div id="panel-serve-select" class="panel">
+    <p class="panel-title">Choose a serve to start the rally:</p>
+    <div id="serve-cards-grid"></div>
+</div>
+
+<!-- SERVE PREVIEW -->
+<div id="panel-serve-preview" class="panel" style="display:none">
+    <div class="preview-layout">
+        <div class="preview-info">
+            <div class="preview-title" id="preview-title"></div>
+            <div class="preview-desc" id="preview-desc"></div>
+            <div class="spin-badge" id="preview-spin"></div>
+        </div>
+        <div class="preview-actions">
+            <button class="btn-secondary" id="btn-change-serve">← Change Serve</button>
+            <button class="btn-primary" id="btn-setup-response">Set up Response →</button>
+        </div>
+    </div>
+</div>
+
+<!-- RESPONSE SETUP -->
+<div id="panel-response-setup" class="panel" style="display:none">
+    <p class="panel-title" id="response-title">How do you respond?</p>
+    <p class="panel-subtitle" id="response-subtitle"></p>
+    <div id="response-buttons"></div>
+</div>
+
+<!-- RESPONSE RESULT -->
+<div id="panel-response-result" class="panel" style="display:none">
+    <div class="rally-count" id="rally-count"></div>
+    <div id="result-message"></div>
+    <div class="result-actions" id="result-actions"></div>
+</div>
+
+<script src="https://unpkg.com/roughjs@4.6.6/bundled/rough.js"></script>
+<script>
+'use strict';
+
+// ── CONSTANTS ──────────────────────────────────────────────────────────────────
+const SPIN = {
+    TOPSPIN:       'topspin',
+    BACKSPIN:      'backspin',
+    SIDESPIN_LEFT: 'sidespin-left',
+    SIDESPIN_RIGHT:'sidespin-right',
+    NOSPIN:        'nospin',
+};
+
+const SPIN_COLORS = {
+    [SPIN.TOPSPIN]:        '#ff6b9d',
+    [SPIN.BACKSPIN]:       '#4dd4f0',
+    [SPIN.SIDESPIN_LEFT]:  '#a3e635',
+    [SPIN.SIDESPIN_RIGHT]: '#f97316',
+    [SPIN.NOSPIN]:         '#888',
+};
+
+const SPIN_LABELS = {
+    [SPIN.TOPSPIN]:        'Topspin',
+    [SPIN.BACKSPIN]:       'Backspin',
+    [SPIN.SIDESPIN_LEFT]:  'Sidespin Left',
+    [SPIN.SIDESPIN_RIGHT]: 'Sidespin Right',
+    [SPIN.NOSPIN]:         'No Spin',
+};
+
+// ── SHOT PRESETS ───────────────────────────────────────────────────────────────
+const SHOTS = [
+    {
+        key: 'forehandLoop',
+        name: 'Forehand Topspin Loop',
+        description: 'Low-to-high brush contact; heavy topspin makes the ball dip sharply on the opponent\'s side.',
+        spin: SPIN.TOPSPIN,
+        view: 'side',
+        racket: {
+            contactX: 0.32, contactY: 0.57, contactAngle: 50,
+            pivotX: 0.26,   pivotY: 0.74,
+            swingRadius: 0.18, fromAngle: 200, toAngle: 50,
+        },
+        trajectory: [
+            { x: 0.32, y: 0.57 },
+            { x: 0.46, y: 0.36 },
+            { x: 0.62, y: 0.58, bounce: true },
+            { x: 0.88, y: 0.40 },
+        ],
+    },
+    {
+        key: 'backhandDrive',
+        name: 'Backhand Drive',
+        description: 'Compact backhand with moderate topspin; flat, fast, and consistent placement.',
+        spin: SPIN.TOPSPIN,
+        view: 'side',
+        racket: {
+            contactX: 0.36, contactY: 0.54, contactAngle: -30,
+            pivotX: 0.43,   pivotY: 0.68,
+            swingRadius: 0.15, fromAngle: 220, toAngle: 60,
+        },
+        trajectory: [
+            { x: 0.36, y: 0.54 },
+            { x: 0.52, y: 0.42 },
+            { x: 0.65, y: 0.57, bounce: true },
+            { x: 0.87, y: 0.45 },
+        ],
+    },
+    {
+        key: 'forehandPush',
+        name: 'Forehand Push',
+        description: 'Short downward stroke generating backspin; ball stays low with a skidding bounce.',
+        spin: SPIN.BACKSPIN,
+        view: 'side',
+        racket: {
+            contactX: 0.37, contactY: 0.53, contactAngle: -20,
+            pivotX: 0.31,   pivotY: 0.47,
+            swingRadius: 0.14, fromAngle: 330, toAngle: 210,
+        },
+        trajectory: [
+            { x: 0.37, y: 0.53 },
+            { x: 0.50, y: 0.46 },
+            { x: 0.64, y: 0.57, bounce: true },
+            { x: 0.83, y: 0.54 },
+        ],
+    },
+    {
+        key: 'backhandPush',
+        name: 'Backhand Push',
+        description: 'Angled backhand slice; heavy backspin keeps the ball low and very short.',
+        spin: SPIN.BACKSPIN,
+        view: 'side',
+        racket: {
+            contactX: 0.36, contactY: 0.52, contactAngle: 20,
+            pivotX: 0.43,   pivotY: 0.47,
+            swingRadius: 0.13, fromAngle: 320, toAngle: 200,
+        },
+        trajectory: [
+            { x: 0.36, y: 0.52 },
+            { x: 0.50, y: 0.46 },
+            { x: 0.63, y: 0.57, bounce: true },
+            { x: 0.81, y: 0.54 },
+        ],
+    },
+    {
+        key: 'lob',
+        name: 'Defensive Lob',
+        description: 'Extreme-height arc pushes opponent back; heavy topspin makes the ball dip steeply after the peak.',
+        spin: SPIN.TOPSPIN,
+        view: 'side',
+        racket: {
+            contactX: 0.20, contactY: 0.70, contactAngle: 60,
+            pivotX: 0.14,   pivotY: 0.85,
+            swingRadius: 0.22, fromAngle: 215, toAngle: 45,
+        },
+        trajectory: [
+            { x: 0.20, y: 0.70 },
+            { x: 0.44, y: 0.10 },
+            { x: 0.68, y: 0.58, bounce: true },
+            { x: 0.88, y: 0.40 },
+        ],
+    },
+    {
+        key: 'dropShot',
+        name: 'Drop Shot',
+        description: 'Deceptive feather touch with heavy backspin; ball barely clears the net and dies close to it.',
+        spin: SPIN.BACKSPIN,
+        view: 'side',
+        racket: {
+            contactX: 0.35, contactY: 0.49, contactAngle: -10,
+            pivotX: 0.31,   pivotY: 0.43,
+            swingRadius: 0.10, fromAngle: 300, toAngle: 190,
+        },
+        trajectory: [
+            { x: 0.35, y: 0.49 },
+            { x: 0.48, y: 0.42 },
+            { x: 0.57, y: 0.57, bounce: true },
+            { x: 0.63, y: 0.59 },
+        ],
+    },
+    {
+        key: 'pendulumServe',
+        name: 'Pendulum Sidespin Serve',
+        description: 'Top view: pendulum wrist sweeps across the ball; sidespin curves the trajectory after bounce.',
+        spin: SPIN.SIDESPIN_LEFT,
+        view: 'top',
+        racket: {
+            contactX: 0.24, contactY: 0.55, contactAngle: 0,
+            pivotX: 0.18,   pivotY: 0.40,
+            swingRadius: 0.18, fromAngle: 260, toAngle: 80,
+        },
+        trajectory: [
+            { x: 0.24, y: 0.55 },
+            { x: 0.43, y: 0.52 },
+            { x: 0.54, y: 0.50, bounce: true },
+            { x: 0.82, y: 0.40 },
+        ],
+    },
+    {
+        key: 'flip',
+        name: 'Short Ball Flip',
+        description: 'Aggressive wrist snap over a short ball; punchy topspin counters the opponent\'s backspin.',
+        spin: SPIN.TOPSPIN,
+        view: 'side',
+        racket: {
+            contactX: 0.37, contactY: 0.49, contactAngle: 55,
+            pivotX: 0.31,   pivotY: 0.62,
+            swingRadius: 0.14, fromAngle: 195, toAngle: 55,
+        },
+        trajectory: [
+            { x: 0.37, y: 0.49 },
+            { x: 0.52, y: 0.32 },
+            { x: 0.65, y: 0.57, bounce: true },
+            { x: 0.86, y: 0.40 },
+        ],
+    },
+];
+
+// ── RESPONSE OPTIONS ────────────────────────────────────────────────────────────
+// Maps incoming spin type → array of response choices.
+// valid:true  → show green button, result is mirrored resultShotBase
+// valid:false → show red button, result is buildErrorShot(errorType, ...)
+const RESPONSE_OPTIONS = {
+    [SPIN.TOPSPIN]: [
+        { key:'block',       name:'Block',              valid: true,  resultShotBase:'backhandDrive',
+          spinOut: SPIN.TOPSPIN,
+          hint: 'Flat closed face redirects topspin — fast and controlled.' },
+        { key:'counterLoop', name:'Counter-loop',        valid: true,  resultShotBase:'forehandLoop',
+          spinOut: SPIN.TOPSPIN,
+          hint: 'Brush up and through — fights topspin with topspin.' },
+        { key:'lob',         name:'Defensive Lob',       valid: true,  resultShotBase:'lob',
+          spinOut: SPIN.TOPSPIN,
+          hint: 'High arc with heavy topspin; forces opponent far back.' },
+        { key:'push',        name:'Push',                valid: false, errorType:'net',
+          errorReason: 'Topspin drives ball downward — open-face push goes straight into the net.' },
+        { key:'chop',        name:'Chop',                valid: false, errorType:'net',
+          errorReason: 'Heavy downward chop against topspin dumps the ball into the net.' },
+    ],
+    [SPIN.BACKSPIN]: [
+        { key:'push',        name:'Push',                valid: true,  resultShotBase:'forehandPush',
+          spinOut: SPIN.BACKSPIN,
+          hint: 'Match open face to backspin — keeps ball low and controlled.' },
+        { key:'flip',        name:'Flip / Flick',         valid: true,  resultShotBase:'flip',
+          spinOut: SPIN.TOPSPIN,
+          hint: 'Wrist snap converts backspin to topspin over a short ball.' },
+        { key:'loop',        name:'Topspin Loop',         valid: true,  resultShotBase:'forehandLoop',
+          spinOut: SPIN.TOPSPIN,
+          hint: 'Low-to-high brush lifts through the backspin.' },
+        { key:'blockFlat',   name:'Flat Block',           valid: false, errorType:'net',
+          errorReason: 'Backspin kills the ball — flat closed face → net.' },
+        { key:'smash',       name:'Smash',                valid: false, errorType:'net',
+          errorReason: 'Backspin drops fast — smashing without lifting → net.' },
+    ],
+    [SPIN.SIDESPIN_LEFT]: [
+        { key:'adjustBlock', name:'Adjusted Block',      valid: true,  resultShotBase:'backhandDrive',
+          spinOut: SPIN.NOSPIN,
+          hint: 'Angle face right — sidespin redirected neutrally back.' },
+        { key:'counter',     name:'Counter-sidespin',     valid: true,  resultShotBase:'forehandLoop',
+          spinOut: SPIN.SIDESPIN_RIGHT,
+          hint: 'Brush across the ball to return sidespin with opposite sidespin.' },
+        { key:'squarePush',  name:'Square Push',          valid: false, errorType:'long',
+          errorReason: 'Sidespin curves sideways — square face deflects ball off the table edge.' },
+    ],
+    [SPIN.SIDESPIN_RIGHT]: [
+        { key:'adjustBlock', name:'Adjusted Block',      valid: true,  resultShotBase:'backhandDrive',
+          spinOut: SPIN.NOSPIN,
+          hint: 'Angle face left — sidespin redirected neutrally back.' },
+        { key:'counter',     name:'Counter-sidespin',     valid: true,  resultShotBase:'forehandLoop',
+          spinOut: SPIN.SIDESPIN_LEFT,
+          hint: 'Brush across the ball to return sidespin with opposite sidespin.' },
+        { key:'squarePush',  name:'Square Push',          valid: false, errorType:'long',
+          errorReason: 'Sidespin curves sideways — square face deflects ball off the table edge.' },
+    ],
+    [SPIN.NOSPIN]: [
+        { key:'drive',       name:'Drive',               valid: true,  resultShotBase:'backhandDrive',
+          spinOut: SPIN.NOSPIN,
+          hint: 'Flat hit — safe return with neutral contact.' },
+        { key:'topspin',     name:'Add Topspin',          valid: true,  resultShotBase:'forehandLoop',
+          spinOut: SPIN.TOPSPIN,
+          hint: 'Add topspin to a dead ball — forces opponent to react to spin.' },
+        { key:'push',        name:'Push / Slice',          valid: true,  resultShotBase:'forehandPush',
+          spinOut: SPIN.BACKSPIN,
+          hint: 'Add backspin — forces opponent to lift carefully.' },
+    ],
+};
+
+// ── MIRROR A SHOT (geometric flip for receiver's right-to-left response) ────────
+// Flips x-coordinates so the shot travels right→left.
+// Cannot naively reverse the array because shotPath() requires kp[1] to be
+// the arc PEAK (before the bounce). Instead we reconstruct it geometrically.
+function mirrorShot(shot, newKey) {
+    const orig = shot.trajectory;
+    const bounceIdx = orig.findIndex(p => p.bounce);
+    if (bounceIdx < 0) {
+        // No bounce — simple mirror of all points
+        const mirrored = orig.map((p, i) => ({
+            x: 1 - p.x, y: p.y, ...(p.bounce ? { bounce: true } : {}),
+        })).reverse();
+        return {
+            key: newKey || shot.key + '_m',
+            name: shot.name, description: shot.description,
+            spin: shot.spin, view: shot.view,
+            racket: {
+                contactX: 1 - shot.racket.contactX, contactY: shot.racket.contactY,
+                contactAngle: -shot.racket.contactAngle,
+                pivotX: 1 - shot.racket.pivotX, pivotY: shot.racket.pivotY,
+                swingRadius: shot.racket.swingRadius,
+                fromAngle: (shot.racket.fromAngle + 180) % 360,
+                toAngle:   (shot.racket.toAngle   + 180) % 360,
+            },
+            trajectory: mirrored,
+        };
+    }
+
+    // Mirror contact: server hits from orig[0], mirrored receiver hits from 1-orig[0].x
+    const newStart  = { x: 1 - orig[0].x,                y: orig[0].y };
+    const newBounce = { x: 1 - orig[bounceIdx].x,        y: orig[bounceIdx].y, bounce: true };
+    const newEnd    = { x: 1 - orig[orig.length - 1].x,  y: orig[orig.length - 1].y };
+
+    // Reconstruct arc peak geometrically: preserve height above the midline
+    const midX       = (newStart.x + newBounce.x) / 2;
+    const midY       = (newStart.y + newBounce.y) / 2;
+    const origPeak   = orig[1] || orig[0];
+    const origMidY   = (orig[0].y + orig[bounceIdx].y) / 2;
+    const origArcH   = origMidY - origPeak.y;   // positive = peak above midline
+    const newPeak    = { x: midX, y: midY - origArcH };
+
+    return {
+        key: newKey || shot.key + '_m',
+        name: shot.name, description: shot.description,
+        spin: shot.spin, view: shot.view,
+        racket: {
+            contactX: 1 - shot.racket.contactX, contactY: shot.racket.contactY,
+            contactAngle: -shot.racket.contactAngle,
+            pivotX: 1 - shot.racket.pivotX,     pivotY: shot.racket.pivotY,
+            swingRadius: shot.racket.swingRadius,
+            fromAngle: (shot.racket.fromAngle + 180) % 360,
+            toAngle:   (shot.racket.toAngle   + 180) % 360,
+        },
+        trajectory: [newStart, newPeak, newBounce, newEnd],
+    };
+}
+
+// ── BUILD AN ERROR SHOT (no bounce → ball hits net or flies long) ─────────────
+// contactPt is the receiver's contact position {x, y} (right side, x≈0.6-0.8)
+function buildErrorShot(errorType, contactPt) {
+    if (errorType === 'net') {
+        // Ball goes toward net but hits it (x≈0.50)
+        const peakX = (contactPt.x + 0.50) / 2;
+        const peakY = Math.min(contactPt.y, 0.54) - 0.06;
+        return {
+            key: '__error_net__', spin: SPIN.NOSPIN, view: 'side',
+            racket: {
+                contactX: contactPt.x, contactY: contactPt.y, contactAngle: 0,
+                pivotX: contactPt.x - 0.06, pivotY: contactPt.y + 0.15,
+                swingRadius: 0.10, fromAngle: 0, toAngle: 180,
+            },
+            trajectory: [
+                { x: contactPt.x, y: contactPt.y },
+                { x: peakX, y: peakY },
+                { x: 0.50, y: 0.595 },  // hits net
+            ],
+        };
+    }
+    if (errorType === 'long') {
+        // Ball flies over the table entirely (ends at x≈0.04 = past left edge)
+        const peakX = (contactPt.x + 0.04) / 2;
+        const peakY = Math.min(contactPt.y, 0.54) - 0.12;
+        return {
+            key: '__error_long__', spin: SPIN.NOSPIN, view: 'side',
+            racket: {
+                contactX: contactPt.x, contactY: contactPt.y, contactAngle: 30,
+                pivotX: contactPt.x - 0.05, pivotY: contactPt.y + 0.14,
+                swingRadius: 0.10, fromAngle: 5, toAngle: 185,
+            },
+            trajectory: [
+                { x: contactPt.x, y: contactPt.y },
+                { x: peakX, y: peakY },
+                { x: 0.04, y: 0.58 },  // past table end
+            ],
+        };
+    }
+    // fallback
+    return buildErrorShot('net', contactPt);
+}
+
+// Determine if a shot travels right-to-left (+1) or left-to-right (-1)
+function shotXDir(shot) {
+    const kp = shot.trajectory;
+    const bounceIdx = kp.findIndex(p => p.bounce);
+    const ref = bounceIdx >= 0 ? kp[bounceIdx] : kp[kp.length - 1];
+    return ref.x > kp[0].x ? 1 : -1;
+}
+
+// ── DRAWING FUNCTIONS ──────────────────────────────────────────────────────────
+function drawTable(rc, W, H, view) {
+    if (view === 'top') {
+        const L = W * 0.07, R = W * 0.93;
+        const T = H * 0.20, B = H * 0.80;
+        const midX = (L + R) / 2;
+        const midY = (T + B) / 2;
+        rc.rectangle(L, T, R - L, B - T, {
+            roughness: 1.2, stroke: '#3a8a5a', strokeWidth: 2,
+            fill: 'rgba(12, 48, 25, 0.9)', fillStyle: 'solid', seed: 42,
+        });
+        rc.line(L, midY, R, midY, { roughness: 0.8, stroke: '#d4c898', strokeWidth: 3, seed: 44 });
+        rc.line(midX, T, midX, B, { roughness: 0.5, stroke: 'rgba(255,255,255,0.18)', strokeWidth: 1, seed: 45 });
+    } else {
+        const tableY = H * 0.60;
+        const L = W * 0.07, R = W * 0.93;
+        const midX = (L + R) / 2;
+        const netH = H * 0.07;
+        const thick = 7;
+        rc.line(L, tableY, R, tableY, { roughness: 1.1, stroke: '#3a8a5a', strokeWidth: 3, seed: 42 });
+        rc.rectangle(L, tableY, R - L, thick, {
+            roughness: 0.8, stroke: '#2a5a30', strokeWidth: 1,
+            fill: 'rgba(18, 55, 22, 0.95)', fillStyle: 'solid', seed: 53,
+        });
+        rc.line(midX, tableY - netH, midX, tableY, { roughness: 0.9, stroke: '#c8b870', strokeWidth: 3, seed: 7 });
+        rc.circle(midX, tableY - netH, 6, {
+            roughness: 0.5, stroke: '#c8b870', fill: '#a89840', fillStyle: 'solid', seed: 8,
+        });
+    }
+}
+
+function drawRacket(rc, cx, cy, angleDeg, scale, seed) {
+    const rad = angleDeg * Math.PI / 180;
+    const rx = scale * 0.82;
+    const ry = scale * 1.05;
+    const steps = 18;
+    const pts = [];
+    for (let i = 0; i <= steps; i++) {
+        const a = (i / steps) * Math.PI * 2;
+        pts.push([
+            cx + Math.cos(rad) * Math.cos(a) * rx - Math.sin(rad) * Math.sin(a) * ry,
+            cy + Math.sin(rad) * Math.cos(a) * rx + Math.cos(rad) * Math.sin(a) * ry,
+        ]);
+    }
+    rc.polygon(pts, { roughness: 1.0, stroke: '#cc4422', fill: '#7a1a08', fillStyle: 'hachure', hachureGap: 3.5, seed });
+    const perp = rad + Math.PI / 2;
+    const hLen = scale * 1.8;
+    rc.line(
+        cx + Math.cos(perp) * scale * 0.4, cy + Math.sin(perp) * scale * 0.4,
+        cx + Math.cos(perp) * hLen,         cy + Math.sin(perp) * hLen,
+        { roughness: 0.9, stroke: '#7a4e28', strokeWidth: 4, seed: seed + 1 }
+    );
+}
+
+function drawRacketArc(rc, W, H, shot) {
+    const px = shot.racket.pivotX * W;
+    const py = shot.racket.pivotY * H;
+    const radius = shot.racket.swingRadius * W;
+    let diff = shot.racket.toAngle - shot.racket.fromAngle;
+    if (diff > 180)  diff -= 360;
+    if (diff < -180) diff += 360;
+
+    const steps = 22;
+    const pts = [];
+    for (let i = 0; i <= steps; i++) {
+        const a = (shot.racket.fromAngle + diff * (i / steps)) * Math.PI / 180;
+        pts.push([px + Math.cos(a) * radius, py + Math.sin(a) * radius]);
+    }
+    for (let i = 0; i < pts.length - 1; i += 2) {
+        rc.line(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1], {
+            roughness: 0.5, stroke: '#5a7fbf', strokeWidth: 1.5, seed: 17 + i,
+        });
+    }
+    if (pts.length >= 2) {
+        const last = pts[pts.length - 1];
+        const prev = pts[pts.length - 2];
+        drawArrowhead(rc, prev[0], prev[1], last[0], last[1], '#5a7fbf', 9);
+    }
+}
+
+function drawBall(rc, cx, cy, r, seamRotDeg) {
+    rc.circle(cx, cy, r * 2, {
+        roughness: 0.28, stroke: '#9aaab8', strokeWidth: 0.9,
+        fill: '#edf0f4', fillStyle: 'solid', seed: 31,
+    });
+    const a = seamRotDeg * Math.PI / 180;
+    const SEAM_STEPS = 26;
+    const seamPts = [];
+    for (let i = 0; i <= SEAM_STEPS; i++) {
+        const theta = (i / SEAM_STEPS) * Math.PI * 2;
+        const rx = r * 0.91, ry = r * 0.22;
+        seamPts.push([
+            cx + rx * Math.cos(theta) * Math.cos(a) - ry * Math.sin(theta) * Math.sin(a),
+            cy + rx * Math.cos(theta) * Math.sin(a) + ry * Math.sin(theta) * Math.cos(a),
+        ]);
+    }
+    rc.curve(seamPts, { roughness: 0.15, stroke: '#7f96aa', strokeWidth: 0.85, seed: 32 });
+    const c2 = rc.canvas.getContext('2d');
+    c2.save();
+    c2.beginPath();
+    c2.arc(cx, cy, r * 0.96, 0, Math.PI * 2);
+    c2.clip();
+    if (r >= 5) {
+        const hx = cx - r * 0.28, hy = cy - r * 0.28;
+        const hg = c2.createRadialGradient(hx, hy, 0, hx, hy, r * 0.58);
+        hg.addColorStop(0, 'rgba(255,255,255,0.78)');
+        hg.addColorStop(1, 'rgba(255,255,255,0)');
+        c2.fillStyle = hg;
+        c2.fillRect(cx - r, cy - r, r * 2, r * 2);
+    }
+    if (r >= 5) {
+        const sg = c2.createRadialGradient(cx + r * 0.25, cy + r * 0.25, r * 0.5, cx + r * 0.25, cy + r * 0.25, r * 1.05);
+        sg.addColorStop(0, 'rgba(0,0,0,0)');
+        sg.addColorStop(1, 'rgba(80,100,120,0.18)');
+        c2.fillStyle = sg;
+        c2.fillRect(cx - r, cy - r, r * 2, r * 2);
+    }
+    if (r >= 11) {
+        c2.font = `bold ${Math.round(r * 0.38)}px sans-serif`;
+        c2.fillStyle = 'rgba(70,90,110,0.45)';
+        c2.textAlign = 'center';
+        c2.textBaseline = 'middle';
+        c2.fillText('★', cx + r * 0.28, cy + r * 0.30);
+    }
+    c2.restore();
+}
+
+function drawSpinIndicator(rc, cx, cy, spinType, size) {
+    const color = SPIN_COLORS[spinType];
+    if (!color || spinType === SPIN.NOSPIN) return;
+    let startA, endA;
+    if (spinType === SPIN.TOPSPIN) {
+        startA = Math.PI; endA = 2 * Math.PI;
+    } else if (spinType === SPIN.BACKSPIN) {
+        startA = 0; endA = Math.PI;
+    } else if (spinType === SPIN.SIDESPIN_LEFT) {
+        startA = Math.PI / 2; endA = 3 * Math.PI / 2;
+    } else {
+        startA = -Math.PI / 2; endA = Math.PI / 2;
+    }
+    const steps = 12;
+    const scaleY = 0.62;
+    const pts = [];
+    for (let i = 0; i <= steps; i++) {
+        const a = startA + (endA - startA) * (i / steps);
+        pts.push([cx + Math.cos(a) * size, cy + Math.sin(a) * size * scaleY]);
+    }
+    for (let i = 0; i < pts.length - 1; i++) {
+        rc.line(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1], {
+            roughness: 0.5, stroke: color, strokeWidth: 2.2, seed: 70 + i,
+        });
+    }
+    const last = pts[pts.length - 1];
+    const prev = pts[pts.length - 2];
+    drawArrowhead(rc, prev[0], prev[1], last[0], last[1], color, 7);
+}
+
+function drawSmoothPath(ctx, pts, color, lineWidth, alpha) {
+    if (pts.length < 2) return;
+    ctx.save();
+    if (alpha != null) ctx.globalAlpha = alpha;
+    ctx.strokeStyle = color;
+    ctx.lineWidth   = lineWidth;
+    ctx.lineJoin    = 'round';
+    ctx.lineCap     = 'round';
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < pts.length - 1; i++) {
+        const mx = (pts[i][0] + pts[i + 1][0]) / 2;
+        const my = (pts[i][1] + pts[i + 1][1]) / 2;
+        ctx.quadraticCurveTo(pts[i][0], pts[i][1], mx, my);
+    }
+    ctx.lineTo(pts[pts.length - 1][0], pts[pts.length - 1][1]);
+    ctx.stroke();
+    ctx.restore();
+}
+
+function drawArrowhead(rc, x1, y1, x2, y2, color, size) {
+    const angle  = Math.atan2(y2 - y1, x2 - x1);
+    const spread = 0.48;
+    rc.line(x2, y2, x2 - Math.cos(angle - spread) * size, y2 - Math.sin(angle - spread) * size, {
+        roughness: 0.4, stroke: color, strokeWidth: 1.8, seed: 110,
+    });
+    rc.line(x2, y2, x2 - Math.cos(angle + spread) * size, y2 - Math.sin(angle + spread) * size, {
+        roughness: 0.4, stroke: color, strokeWidth: 1.8, seed: 111,
+    });
+}
+
+// ── PHYSICS ────────────────────────────────────────────────────────────────────
+function parabolicBlend(t, p0, pMid, pEnd) {
+    const x = p0.x + (pEnd.x - p0.x) * t;
+    const yLinear = p0.y + (pEnd.y - p0.y) * t;
+    const bulge = pMid.y - (p0.y + pEnd.y) / 2;
+    return { x, y: yLinear + bulge * Math.sin(Math.PI * t) };
+}
+
+function shotPath(t, shot) {
+    const kp = shot.trajectory;
+    const bounceIdx = kp.findIndex(p => p.bounce);
+
+    if (bounceIdx < 0) {
+        const pMid = kp[1] || {
+            x: (kp[0].x + kp[kp.length - 1].x) / 2,
+            y: Math.min(kp[0].y, kp[kp.length - 1].y) - 0.08,
+        };
+        return parabolicBlend(t, kp[0], pMid, kp[kp.length - 1]);
+    }
+
+    const bounceT = shot.spin === SPIN.TOPSPIN  ? 0.70
+                  : shot.spin === SPIN.BACKSPIN ? 0.33
+                  : 0.52;
+
+    const p0   = kp[0];
+    const pBnc = kp[bounceIdx];
+    const pEnd = kp[kp.length - 1];
+
+    const preMid = kp[1] || { x: (p0.x + pBnc.x) / 2, y: (p0.y + pBnc.y) / 2 - 0.10 };
+
+    const postLift = shot.spin === SPIN.TOPSPIN  ? 0.055
+                   : shot.spin === SPIN.BACKSPIN ? 0.015
+                   : 0.040;
+    const postMid = { x: (pBnc.x + pEnd.x) / 2, y: (pBnc.y + pEnd.y) / 2 - postLift };
+
+    if (t < bounceT) {
+        return parabolicBlend(t / bounceT, p0, preMid, pBnc);
+    } else {
+        return parabolicBlend((t - bounceT) / (1 - bounceT), pBnc, postMid, pEnd);
+    }
+}
+
+function racketSwingPhase(t) {
+    if (t < 0.28) {
+        return Math.sin((t / 0.28) * Math.PI);
+    } else {
+        return -0.5 * Math.sin(((t - 0.28) / 0.72) * Math.PI);
+    }
+}
+
+function getSwingMetrics(shot, W, H) {
+    if (shot.spin === SPIN.TOPSPIN) {
+        return { ftNx: 0.45, ftNy: -0.89, wuNx: -0.18, wuNy:  0.98, angleDelta: 20,  amplitude: W * 0.095 };
+    }
+    if (shot.spin === SPIN.BACKSPIN) {
+        return { ftNx: 0.45, ftNy:  0.89, wuNx: -0.10, wuNy: -0.99, angleDelta: -18, amplitude: W * 0.095 };
+    }
+    if (shot.spin === SPIN.SIDESPIN_LEFT) {
+        return { ftNx: 0.98, ftNy:  0.20, wuNx: -0.10, wuNy: -0.995, angleDelta: -12, amplitude: W * 0.090 };
+    }
+    if (shot.spin === SPIN.SIDESPIN_RIGHT) {
+        return { ftNx: 0.98, ftNy: -0.20, wuNx: -0.10, wuNy:  0.995, angleDelta: 12,  amplitude: W * 0.090 };
+    }
+    const traj = shot.trajectory;
+    const nextPt = traj[1] || traj[0];
+    const bDx = nextPt.x * W - shot.racket.contactX * W;
+    const bDy = nextPt.y * H - shot.racket.contactY * H;
+    const bLen = Math.sqrt(bDx * bDx + bDy * bDy) || 1;
+    return { ftNx: bDx / bLen, ftNy: bDy / bLen, wuNx: -bDx / bLen, wuNy: -bDy / bLen, angleDelta: 0, amplitude: W * 0.058 };
+}
+
+// ── SINGLE SHOT RENDER (for serve preview + serve cards) ──────────────────────
+function renderFrame(canvas, shot, t, showSpin, showArc) {
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width, H = canvas.height;
+
+    ctx.fillStyle = '#0d0d20';
+    ctx.fillRect(0, 0, W, H);
+
+    const rc = rough.canvas(canvas);
+    drawTable(rc, W, H, shot.view);
+    if (showArc) drawRacketArc(rc, W, H, shot);
+
+    {
+        const trajPts = [];
+        for (let i = 0; i <= 44; i++) {
+            const fp = shotPath(i / 44, shot);
+            trajPts.push([fp.x * W, fp.y * H]);
+        }
+        drawSmoothPath(ctx, trajPts, '#4fc3f7', 1.8, 0.82);
+        shot.trajectory.forEach((p, idx) => {
+            if (!p.bounce) return;
+            rc.ellipse(p.x * W, p.y * H, 15, 7, {
+                roughness: 0.6, stroke: '#ff9944', strokeWidth: 2,
+                fill: 'rgba(255,153,68,0.12)', fillStyle: 'solid', seed: 60 + idx,
+            });
+        });
+    }
+
+    const racketScale = Math.max(W * 0.028, 9);
+    const r = shot.racket;
+    const { ftNx: ftNxRaw, ftNy, wuNx: wuNxRaw, wuNy, angleDelta, amplitude } = getSwingMetrics(shot, W, H);
+    const dir = shotXDir(shot);
+    const ftNx = ftNxRaw * dir, wuNx = wuNxRaw * dir;
+
+    const racketAt = (ph) => {
+        if (ph >= 0) return { x: r.contactX * W + ftNx * ph * amplitude, y: r.contactY * H + ftNy * ph * amplitude, angle: r.contactAngle + ph * angleDelta };
+        const wp = -ph;
+        return { x: r.contactX * W + wuNx * wp * amplitude * 0.65, y: r.contactY * H + wuNy * wp * amplitude * 0.65, angle: r.contactAngle - wp * angleDelta };
+    };
+
+    const gp = racketAt(racketSwingPhase((t - 0.04 + 1) % 1));
+    ctx.save(); ctx.globalAlpha = 0.20;
+    drawRacket(rc, gp.x, gp.y, gp.angle, racketScale * 0.88, 14);
+    ctx.restore();
+
+    const mp = racketAt(racketSwingPhase(t));
+    drawRacket(rc, mp.x, mp.y, mp.angle, racketScale, 11);
+
+    const fpos = shotPath(t, shot);
+    const pos  = { x: fpos.x * W, y: fpos.y * H };
+    const ballR = Math.max(W * 0.016, 8);
+
+    {
+        const prevFp = shotPath((t - 0.045 + 1) % 1, shot);
+        const px = prevFp.x * W, py = prevFp.y * H;
+        const grad = ctx.createLinearGradient(px, py, pos.x, pos.y);
+        grad.addColorStop(0, 'rgba(240,224,48,0)');
+        grad.addColorStop(1, 'rgba(240,224,48,0.50)');
+        ctx.save();
+        ctx.strokeStyle = grad; ctx.lineWidth = ballR * 1.8; ctx.lineCap = 'round';
+        ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(pos.x, pos.y);
+        ctx.stroke(); ctx.restore();
+    }
+
+    const spinDir = shot.spin === SPIN.BACKSPIN ? -1 : 1;
+    drawBall(rc, pos.x, pos.y, ballR, t * 360 * spinDir * 4);
+    if (showSpin) drawSpinIndicator(rc, pos.x, pos.y, shot.spin, ballR * 2.3);
+}
+
+// ── GHOST TRAJECTORY OVERLAY ──────────────────────────────────────────────────
+function drawGhostTrajectory(canvas, ghostShot, isValid) {
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width, H = canvas.height;
+    const color = isValid ? '#69f0ae' : '#ff5252';
+    const pts = [];
+    for (let j = 0; j <= 44; j++) {
+        const fp = shotPath(j / 44, ghostShot);
+        pts.push([fp.x * W, fp.y * H]);
+    }
+    ctx.save();
+    ctx.setLineDash([8, 5]);
+    drawSmoothPath(ctx, pts, color, 2.0, 0.55);
+    ctx.setLineDash([]);
+    ctx.restore();
+    if (isValid) {
+        const rc = rough.canvas(canvas);
+        ghostShot.trajectory.forEach((p, idx) => {
+            if (!p.bounce) return;
+            ctx.save(); ctx.globalAlpha = 0.4;
+            rc.ellipse(p.x * W, p.y * H, 14, 6, {
+                roughness: 0.6, stroke: color, strokeWidth: 1.5,
+                fill: 'rgba(105,240,174,0.08)', fillStyle: 'solid', seed: 80 + idx,
+            });
+            ctx.restore();
+        });
+    }
+}
+
+// ── RALLY FRAME RENDERER ──────────────────────────────────────────────────────
+// Renders all shots in the rally. t ∈ [0,1] is divided across N shots.
+// Past shots → dim. Active shot → full brightness with ball animation.
+function renderRallyFrame(canvas, shots, t) {
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width, H = canvas.height;
+
+    ctx.fillStyle = '#0d0d20';
+    ctx.fillRect(0, 0, W, H);
+
+    const rc = rough.canvas(canvas);
+    drawTable(rc, W, H, 'side');
+
+    const N = shots.length;
+    const activeIdx = Math.min(Math.floor(t * N), N - 1);
+    const localT    = (t * N) % 1;
+
+    // Draw all trajectories (past = dimmed, future = very dim, active = bright)
+    shots.forEach((shot, i) => {
+        const isPast   = i < activeIdx;
+        const isActive = i === activeIdx;
+        const alpha    = isPast ? 0.28 : isActive ? 0.88 : 0.12;
+        const isError  = shot.key.startsWith('__error');
+        const color    = isError ? '#ff5252' : '#4fc3f7';
+
+        const pts = [];
+        for (let j = 0; j <= 44; j++) {
+            const fp = shotPath(j / 44, shot);
+            pts.push([fp.x * W, fp.y * H]);
+        }
+        drawSmoothPath(ctx, pts, color, isActive ? 2.0 : 1.4, alpha);
+
+        // Bounce markers (skip for error shots)
+        if (!isError) {
+            shot.trajectory.forEach((p, idx) => {
+                if (!p.bounce) return;
+                ctx.save(); ctx.globalAlpha = alpha * 0.85;
+                rc.ellipse(p.x * W, p.y * H, 15, 7, {
+                    roughness: 0.6, stroke: '#ff9944', strokeWidth: 2,
+                    fill: 'rgba(255,153,68,0.12)', fillStyle: 'solid', seed: 60 + idx,
+                });
+                ctx.restore();
+            });
+        }
+    });
+
+    // Animated ball + racket for active shot
+    if (N > 0) {
+        const activeShot = shots[activeIdx];
+        const isError    = activeShot.key.startsWith('__error');
+        const fpos  = shotPath(localT, activeShot);
+        const pos   = { x: fpos.x * W, y: fpos.y * H };
+        const ballR = Math.max(W * 0.016, 8);
+
+        // Velocity streak
+        {
+            const prevFp = shotPath((localT - 0.045 + 1) % 1, activeShot);
+            const px = prevFp.x * W, py = prevFp.y * H;
+            const grad = ctx.createLinearGradient(px, py, pos.x, pos.y);
+            const streakColor = isError ? 'rgba(255,82,82,' : 'rgba(240,224,48,';
+            grad.addColorStop(0, streakColor + '0)');
+            grad.addColorStop(1, streakColor + '0.50)');
+            ctx.save();
+            ctx.strokeStyle = grad; ctx.lineWidth = ballR * 1.8; ctx.lineCap = 'round';
+            ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(pos.x, pos.y);
+            ctx.stroke(); ctx.restore();
+        }
+
+        const spinDir = activeShot.spin === SPIN.BACKSPIN ? -1 : 1;
+        drawBall(rc, pos.x, pos.y, ballR, localT * 360 * spinDir * 4);
+        if (!isError) drawSpinIndicator(rc, pos.x, pos.y, activeShot.spin, ballR * 2.3);
+
+        // Racket (only for non-error shots)
+        if (!isError) {
+            const racketScale = Math.max(W * 0.028, 9);
+            const r = activeShot.racket;
+            const { ftNx: ftNxRaw, ftNy, wuNx: wuNxRaw, wuNy, angleDelta, amplitude } = getSwingMetrics(activeShot, W, H);
+            const dir = shotXDir(activeShot);
+            const ftNx = ftNxRaw * dir, wuNx = wuNxRaw * dir;
+
+            const racketAt = (ph) => {
+                if (ph >= 0) return { x: r.contactX * W + ftNx * ph * amplitude, y: r.contactY * H + ftNy * ph * amplitude, angle: r.contactAngle + ph * angleDelta };
+                const wp = -ph;
+                return { x: r.contactX * W + wuNx * wp * amplitude * 0.65, y: r.contactY * H + wuNy * wp * amplitude * 0.65, angle: r.contactAngle - wp * angleDelta };
+            };
+
+            const gp = racketAt(racketSwingPhase((localT - 0.04 + 1) % 1));
+            ctx.save(); ctx.globalAlpha = 0.20;
+            drawRacket(rc, gp.x, gp.y, gp.angle, racketScale * 0.88, 14);
+            ctx.restore();
+            const mp = racketAt(racketSwingPhase(localT));
+            drawRacket(rc, mp.x, mp.y, mp.angle, racketScale, 11);
+        }
+    }
+}
+
+// ── ANIMATION ─────────────────────────────────────────────────────────────────
+const animations = new Map();
+
+// For serve card animations (simple loop)
+function startAnimation(canvas, shot, getState) {
+    const key = canvas.dataset.animKey || canvas.id || shot.key;
+    const existing = animations.get(key);
+    if (existing) { existing.active = false; cancelAnimationFrame(existing.raf); }
+
+    let t = 0, lastTs = null;
+    const entry = { active: true, raf: 0 };
+    animations.set(key, entry);
+
+    function frame(ts) {
+        if (!entry.active) return;
+        if (!lastTs) lastTs = ts;
+        const dt = Math.min((ts - lastTs) / 1000, 0.1);
+        lastTs = ts;
+        const st = getState();
+        if (st.playing) t = (t + dt * 0.38 * st.speed) % 1;
+        renderFrame(canvas, shot, t, st.showSpin, false);
+        entry.raf = requestAnimationFrame(frame);
+    }
+    entry.raf = requestAnimationFrame(frame);
+}
+
+// ── APP STATE ─────────────────────────────────────────────────────────────────
+const appState = {
+    phase: 'SERVE_SELECT',      // SERVE_SELECT | SERVE_PREVIEW | RESPONSE_SETUP | RESPONSE_RESULT
+    serveShot: null,            // current incoming shot being responded to
+    committedShots: [],         // all shots committed before current serve
+    pendingResponseShot: null,  // the response selected (not yet committed)
+    incomingSpin: null,         // spin of incoming ball
+    shotCount: 0,               // responses committed so far
+    hoverGhostShot: null,       // ghost trajectory on hover
+    hoverGhostValid: true,
+    resetT: false,
+};
+
+// Returns the full rally shot array for rendering in RESPONSE_RESULT
+function getRallyRenderShots() {
+    const shots = [...appState.committedShots];
+    if (appState.serveShot)            shots.push(appState.serveShot);
+    if (appState.pendingResponseShot)  shots.push(appState.pendingResponseShot);
+    return shots;
+}
+
+// ── MAIN CANVAS ANIMATION LOOP ────────────────────────────────────────────────
+const mainCanvas  = document.getElementById('main-canvas');
+let   mainAnimRef = null;
+
+function startMainAnimation() {
+    if (mainAnimRef) { mainAnimRef.active = false; cancelAnimationFrame(mainAnimRef.raf); }
+
+    let t = 0, lastTs = null, lastPhase = null;
+    const entry = { active: true, raf: 0 };
+    mainAnimRef = entry;
+
+    function frame(ts) {
+        if (!entry.active) return;
+        if (!lastTs) lastTs = ts;
+        const dt = Math.min((ts - lastTs) / 1000, 0.1);
+        lastTs = ts;
+
+        if (appState.resetT) { t = 0; appState.resetT = false; }
+
+        const { phase } = appState;
+
+        if (phase === 'SERVE_SELECT') {
+            // Only redraw idle canvas when first entering this phase
+            if (lastPhase !== 'SERVE_SELECT') {
+                const ctx = mainCanvas.getContext('2d');
+                ctx.fillStyle = '#0d0d20';
+                ctx.fillRect(0, 0, mainCanvas.width, mainCanvas.height);
+                const rc = rough.canvas(mainCanvas);
+                drawTable(rc, mainCanvas.width, mainCanvas.height, 'side');
+                ctx.save();
+                ctx.font = '500 15px system-ui, sans-serif';
+                ctx.fillStyle = 'rgba(79,195,247,0.3)';
+                ctx.textAlign = 'center';
+                ctx.fillText('Select a serve below to begin', mainCanvas.width / 2, mainCanvas.height * 0.36);
+                ctx.restore();
+            }
+
+        } else if (phase === 'SERVE_PREVIEW' || phase === 'RESPONSE_SETUP') {
+            if (appState.serveShot) {
+                t = (t + dt * 0.38) % 1;
+                renderFrame(mainCanvas, appState.serveShot, t, true, false);
+                // Ghost overlay on hover (RESPONSE_SETUP only)
+                if (phase === 'RESPONSE_SETUP' && appState.hoverGhostShot) {
+                    drawGhostTrajectory(mainCanvas, appState.hoverGhostShot, appState.hoverGhostValid);
+                }
+            }
+
+        } else if (phase === 'RESPONSE_RESULT') {
+            const shots = getRallyRenderShots();
+            if (shots.length > 0) {
+                const N = shots.length;
+                t = (t + dt * (0.38 / N)) % 1;
+                renderRallyFrame(mainCanvas, shots, t);
+            }
+        }
+
+        lastPhase = phase;
+        entry.raf = requestAnimationFrame(frame);
+    }
+    entry.raf = requestAnimationFrame(frame);
+}
+
+// ── PANEL HELPERS ─────────────────────────────────────────────────────────────
+const PANELS = ['serve-select', 'serve-preview', 'response-setup', 'response-result'];
+function showPanel(id) {
+    PANELS.forEach(p => {
+        const el = document.getElementById('panel-' + p);
+        if (el) el.style.display = (p === id) ? '' : 'none';
+    });
+}
+
+function updateStepIndicator(phase) {
+    const map = {
+        'SERVE_SELECT': 0, 'SERVE_PREVIEW': 0,
+        'RESPONSE_SETUP': 1, 'RESPONSE_RESULT': 2,
+    };
+    const active = map[phase] ?? 0;
+    for (let i = 0; i < 3; i++) {
+        const dot = document.getElementById('step-dot-' + i);
+        const lbl = document.getElementById('step-lbl-' + i);
+        dot.classList.toggle('active', i === active);
+        dot.classList.toggle('done',   i < active);
+        lbl.classList.toggle('active', i === active);
+        lbl.classList.toggle('done',   i < active);
+    }
+}
+
+// ── STATE TRANSITIONS ─────────────────────────────────────────────────────────
+function goToServeSelect() {
+    appState.phase = 'SERVE_SELECT';
+    appState.serveShot = null;
+    appState.committedShots = [];
+    appState.pendingResponseShot = null;
+    appState.shotCount = 0;
+    showPanel('serve-select');
+    updateStepIndicator('SERVE_SELECT');
+}
+
+function selectServe(key) {
+    const shot = SHOTS.find(s => s.key === key);
+    if (!shot) return;
+    appState.serveShot  = shot;
+    appState.incomingSpin = shot.spin;
+    appState.phase      = 'SERVE_PREVIEW';
+
+    document.getElementById('preview-title').textContent = shot.name;
+    document.getElementById('preview-desc').textContent  = shot.description;
+    const spinBadge = document.getElementById('preview-spin');
+    spinBadge.textContent = SPIN_LABELS[shot.spin] || shot.spin;
+    spinBadge.style.color       = SPIN_COLORS[shot.spin] || '#4fc3f7';
+    spinBadge.style.borderColor = (SPIN_COLORS[shot.spin] || '#4fc3f7') + '55';
+
+    showPanel('serve-preview');
+    updateStepIndicator('SERVE_PREVIEW');
+}
+
+function goToResponseSetup() {
+    appState.phase = 'RESPONSE_SETUP';
+    appState.hoverGhostShot = null;
+
+    const spin = appState.incomingSpin || SPIN.TOPSPIN;
+    const options = RESPONSE_OPTIONS[spin] || RESPONSE_OPTIONS[SPIN.TOPSPIN];
+
+    const subtitle = document.getElementById('response-subtitle');
+    subtitle.textContent = `Incoming spin: ${SPIN_LABELS[spin] || spin}`;
+    subtitle.style.color = SPIN_COLORS[spin] || '#556';
+
+    const title = document.getElementById('response-title');
+    title.textContent = appState.shotCount === 0
+        ? 'How do you respond to the serve?'
+        : `How do you respond? (shot ${appState.shotCount + 1})`;
+
+    const container = document.getElementById('response-buttons');
+    container.innerHTML = '';
+
+    options.forEach(option => {
+        const btn = document.createElement('button');
+        btn.className = 'resp-btn ' + (option.valid ? 'valid' : 'invalid');
+        btn.textContent = option.name;
+        if (!option.valid) btn.textContent += ' ✗';
+
+        // The user always plays as the right-side receiver.
+        // Incoming serve is always left-to-right → response is always right-to-left → mirror.
+        const baseShot = SHOTS.find(s => s.key === option.resultShotBase);
+
+        let ghostShot;
+
+        if (option.valid && baseShot) {
+            ghostShot = mirrorShot(baseShot);
+        } else {
+            // Derive contact point from the first valid option's mirrored base
+            const anyBase = options
+                .filter(o => o.valid)
+                .map(o => SHOTS.find(s => s.key === o.resultShotBase))
+                .find(Boolean);
+            const contactPt = anyBase
+                ? (() => { const m = mirrorShot(anyBase); return { x: m.trajectory[0].x, y: m.trajectory[0].y }; })()
+                : { x: 0.65, y: 0.55 };
+            ghostShot = buildErrorShot(option.errorType, contactPt);
+        }
+
+        btn.addEventListener('mouseenter', () => {
+            appState.hoverGhostShot  = ghostShot;
+            appState.hoverGhostValid = option.valid;
+        });
+        btn.addEventListener('mouseleave', () => {
+            appState.hoverGhostShot = null;
+        });
+        btn.addEventListener('click', () => {
+            appState.hoverGhostShot = null;
+            selectResponse(option, ghostShot);
+        });
+
+        container.appendChild(btn);
+    });
+
+    showPanel('response-setup');
+    updateStepIndicator('RESPONSE_SETUP');
+}
+
+function selectResponse(option, responseShot) {
+    appState.phase = 'RESPONSE_RESULT';
+    appState.pendingResponseShot = responseShot;
+    appState.resetT = true;
+
+    const resultMsg    = document.getElementById('result-message');
+    const rallyCount   = document.getElementById('rally-count');
+    const resultActions = document.getElementById('result-actions');
+
+    const totalShots = appState.committedShots.length + 2; // serve + response
+    rallyCount.textContent = `Rally length: ${totalShots} shot${totalShots !== 1 ? 's' : ''}`;
+
+    if (option.valid) {
+        resultMsg.className = 'valid';
+        resultMsg.innerHTML = `<strong>✓ ${option.name}</strong><br>${option.hint || ''}`;
+        resultActions.innerHTML = '';
+
+        const btnTryDiff = document.createElement('button');
+        btnTryDiff.className = 'btn-secondary';
+        btnTryDiff.textContent = '← Try Different';
+        btnTryDiff.addEventListener('click', () => {
+            // Just go back — pendingResponseShot will be replaced, committedShots unchanged
+            appState.pendingResponseShot = null;
+            goToResponseSetup();
+        });
+
+        const btnAddNext = document.createElement('button');
+        btnAddNext.className = 'btn-primary';
+        btnAddNext.textContent = 'Add Next Response →';
+        btnAddNext.addEventListener('click', () => {
+            // Commit current serve + response into committedShots
+            appState.committedShots = [
+                ...appState.committedShots,
+                appState.serveShot,
+                responseShot,
+            ];
+            appState.pendingResponseShot = null;
+            appState.shotCount++;
+
+            // The receiver just hit right-to-left. The "server" now returns left-to-right.
+            // Auto-generate the next left-to-right shot from the same base (original orientation).
+            const nextServeBase = SHOTS.find(s => s.key === option.resultShotBase) || SHOTS[1];
+            appState.serveShot    = nextServeBase;  // always left-to-right
+            appState.incomingSpin = option.spinOut || SPIN.NOSPIN;
+            goToResponseSetup();
+        });
+
+        resultActions.appendChild(btnTryDiff);
+        resultActions.appendChild(btnAddNext);
+    } else {
+        resultMsg.className = 'error';
+        resultMsg.innerHTML = `<strong>✗ ${option.name}</strong><br>${option.errorReason || ''}`;
+        resultActions.innerHTML = '';
+
+        const btnTryAgain = document.createElement('button');
+        btnTryAgain.className = 'btn-secondary';
+        btnTryAgain.textContent = '← Try Again';
+        btnTryAgain.addEventListener('click', () => {
+            appState.pendingResponseShot = null;
+            goToResponseSetup();
+        });
+
+        const btnRestart = document.createElement('button');
+        btnRestart.className = 'btn-primary';
+        btnRestart.textContent = 'New Rally';
+        btnRestart.addEventListener('click', goToServeSelect);
+
+        resultActions.appendChild(btnTryAgain);
+        resultActions.appendChild(btnRestart);
+    }
+
+    showPanel('response-result');
+    updateStepIndicator('RESPONSE_RESULT');
+}
+
+// ── SERVE CARD CREATION ───────────────────────────────────────────────────────
+function createServeCard(shot) {
+    const card = document.createElement('div');
+    card.className = 'serve-card';
+    card.dataset.key = shot.key;
+
+    const canvas = document.createElement('canvas');
+    canvas.width  = 240;
+    canvas.height = 136;
+    canvas.dataset.animKey = 'serve-card-' + shot.key;
+
+    const label = document.createElement('div');
+    label.className = 'serve-card-label';
+    label.textContent = shot.name;
+
+    card.appendChild(canvas);
+    card.appendChild(label);
+    card.addEventListener('click', () => selectServe(shot.key));
+
+    startAnimation(canvas, shot, () => ({ playing: true, speed: 0.55, showSpin: true }));
+    return card;
+}
+
+// ── CONTROLS ──────────────────────────────────────────────────────────────────
+document.getElementById('btn-change-serve').addEventListener('click', goToServeSelect);
+document.getElementById('btn-setup-response').addEventListener('click', goToResponseSetup);
+
+// ── INIT ──────────────────────────────────────────────────────────────────────
+const grid = document.getElementById('serve-cards-grid');
+SHOTS.forEach(shot => grid.appendChild(createServeCard(shot)));
+
+startMainAnimation();
+</script>
+</body>
+</html>
