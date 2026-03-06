@@ -1,0 +1,1169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>TT Serve Response</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#060810; display:flex; flex-direction:column; align-items:center; justify-content:center; height:100vh; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; }
+canvas { display:block; border-radius:8px; }
+</style>
+</head>
+<body>
+<canvas id="c" width="900" height="600"></canvas>
+<script>
+'use strict';
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const W = 900, H = 600;
+
+// ── Physics constants (reused from tt-game-poc.html) ─────────────────────────
+const SCALE   = 200;          // 200px = 1 metre
+const FPS     = 60;
+const TIME_SCALE = 0.35;
+const G       = 9.81 * SCALE / (FPS * FPS) * TIME_SCALE;  // ~0.191 px/frame²
+const MAGNUS_C         = 0.00045;
+const SPIN_DECAY_AIR   = 0.9978;
+const SPIN_DECAY_TABLE = 0.55;
+const COR_TABLE = 0.89;
+const COR_NET   = 0.40;
+const SPIN_TOP_KICK  = 0.025;  // vz boost per spin-unit on topspin bounce
+const SPIN_BACK_KICK = 0.015;  // vz reduction per |spin| on backspin bounce
+
+// ── Table geometry (physics space, 200 px/m) ─────────────────────────────────
+// x: -152.5 .. +152.5  (1.525 m wide)
+// y:  0 = table surface, + = up
+// z:  0 = player near end, 548 = opponent far end  (2.74 m)
+const TBL_HW  = 152.5;   // half-width px
+const TBL_D   = 548;     // depth px
+const TBL_H   = 274;     // half-depth / net z
+const NET_H   = 30.5;    // net height px (0.1525 m)
+
+// ── Screen-space trapezoid anchors ───────────────────────────────────────────
+const CX            = W / 2;   // 450
+const TBL_NEAR_Y    = 515;     // screen Y of player near edge
+const TBL_FAR_Y     = 178;     // screen Y of opponent far edge
+const TBL_NEAR_HW   = 335;     // half-width in screen px at near edge  (full=670)
+const TBL_FAR_HW    = 105;     // half-width in screen px at far edge   (full=210)
+
+// ── Animation timing ─────────────────────────────────────────────────────────
+const MASTER_FRAMES    = 130;
+const RALLY_AUTO       = 90;   // frames before auto-advancing after a win (~1.5s)
+const CONTACT_MT       = 0.42;
+const PLAYER_FRAMES    = 78;
+const PLAYER_CONTACT_T = 0.50;
+
+// Serve start (physics coords)
+const OPP_TOSS_X       = 70;    // slightly right of center
+const OPP_TOSS_Z       = 522;   // near far end
+const OPP_CONTACT_Y    = 56;    // ball height at contact (physics px)
+const OPP_TOSS_PEAK    = 118;   // peak height above lerp line
+
+// ── Racket geometry (reused from physics-poc-2.html) ─────────────────────────
+const BLD_RX = 21, BLD_RY = 27;
+const BLD_H  = 48;
+const HDL_W  = 10, HDL_L  = 44;
+const WRIST_D = BLD_H / 2 + HDL_L * 0.50;   // 46 px
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+function lerp(a, b, t) { return a + (b - a) * t; }
+function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+// Project physics (xPx, yPx, zPx) → screen {sx, sy, scale}
+function project(xPx, yPx, zPx) {
+  const t  = clamp(zPx / TBL_D, 0, 1);
+  const hw = lerp(TBL_NEAR_HW, TBL_FAR_HW, t);
+  const ty = lerp(TBL_NEAR_Y,  TBL_FAR_Y,  t);
+  return {
+    sx:    CX + (xPx / TBL_HW) * hw,
+    sy:    ty - yPx * (hw / TBL_NEAR_HW),
+    scale: hw / TBL_NEAR_HW,
+  };
+}
+
+// Ease-in-out (reused from physics-poc-2.html)
+function ease(p) { return p < 0.5 ? 2*p*p : -1 + (4 - 2*p)*p; }
+
+function lerpKF(kfs, t) {
+  let i = 0;
+  while (i < kfs.length - 2 && t > kfs[i+1].t) i++;
+  const a = kfs[i], b = kfs[i+1];
+  const e = ease(clamp((t - a.t) / ((b.t - a.t) || 1), 0, 1));
+  const out = {};
+  for (const k of Object.keys(a)) {
+    if (k !== 't') out[k] = a[k] + (b[k] - a[k]) * e;
+  }
+  return out;
+}
+
+// ── Spin config ───────────────────────────────────────────────────────────────
+const SPIN_CFG = {
+  topspin:  { color: '#ff6b9d', label: 'TOPSPIN'  },
+  backspin: { color: '#4dd4f0', label: 'BACKSPIN' },
+};
+
+// ── Serve types ───────────────────────────────────────────────────────────────
+const SERVES = {
+  topspin: {
+    label: 'Topspin', color: '#ff6b9d',
+    desc:  'Ball dips fast & speeds forward on bounce',
+    spin:  22, launchVy: 4.8, launchVz: -3.5, launchVx: 0,
+  },
+  backspin: {
+    label: 'Backspin', color: '#4dd4f0',
+    desc:  'Ball floats high & slows/kicks back on bounce',
+    spin: -20, launchVy: 4.2, launchVz: -4.5, launchVx: 0,
+  },
+};
+
+// ── Opponent arm keyframes ────────────────────────────────────────────────────
+// Screen-space offsets from shoulder position  (dx, dy)
+// armScale is applied when rendering — offsets are in "design pixels"
+const OPP_KFS = {
+  topspin: [
+    { t: 0.00, dx:  10, dy:  50, angle: -0.50, palmRot:  0.00 },  // ready — low
+    { t: 0.42, dx:   8, dy:  18, angle: -1.20, palmRot:  0.60 },  // contact — brushing up
+    { t: 0.75, dx:  -8, dy: -50, angle: -0.90, palmRot:  0.20 },  // follow-through HIGH
+  ],
+  backspin: [
+    { t: 0.00, dx:  15, dy:  28, angle:  0.35, palmRot:  0.00 },  // ready — neutral
+    { t: 0.20, dx:  22, dy: -62, angle:  0.58, palmRot: -0.08 },  // backswing — arm RAISES HIGH
+    { t: 0.42, dx:   8, dy:  22, angle:  0.18, palmRot:  0.52 },  // contact — CHOPS DOWN fast
+    { t: 0.75, dx:  -8, dy:  68, angle:  0.03, palmRot:  0.10 },  // follow-through — very LOW
+  ],
+};
+
+// ── Responses ─────────────────────────────────────────────────────────────────
+const RESPONSES = [
+  { id: 'loop',  label: 'Topspin Loop', icon: '↑↑', swingLabel: '↑ Sweeping up'      },
+  { id: 'push',  label: 'Push',         icon: '→',  swingLabel: '→ Guiding forward'   },
+  { id: 'drive', label: 'Flat Drive',   icon: '⟶',  swingLabel: '→ Driving through'   },
+  { id: 'block', label: 'Block',        icon: '▣',  swingLabel: '▣ Firm and still'    },
+  { id: 'flick', label: 'Flick',        icon: '↗',  swingLabel: '↗ Snapping wrist up' },
+];
+
+// Player racket swing keyframes — offsets relative to contact ball position
+// oy: positive = below ball (low), negative = above ball (high)
+// ox: negative = back/left (windup), positive = forward/right (follow-through)
+const PLAYER_KFS = {
+  loop: [
+    { t: 0.00, ox:   0, oy:  52, ang:  0.25 },
+    { t: 0.20, ox: -38, oy:  95, ang:  0.12 },   // windup LOW — racket dips down-left
+    { t: 0.50, ox:   0, oy:   0, ang:  1.22 },   // contact (70° blade)
+    { t: 0.78, ox:  55, oy: -95, ang: -0.85 },   // follow-through HIGH — sweeps upward
+    { t: 1.00, ox:   0, oy:  52, ang:  0.25 },
+  ],
+  push: [
+    { t: 0.00, ox:   0, oy:   5, ang: -0.30 },
+    { t: 0.20, ox: -35, oy:  10, ang: -0.52 },   // pullback — stays flat
+    { t: 0.50, ox:   0, oy:   0, ang: -0.52 },   // contact (open blade)
+    { t: 0.78, ox:  65, oy:  -5, ang: -0.38 },   // push FORWARD — ox is dominant
+    { t: 1.00, ox:   0, oy:   5, ang: -0.30 },
+  ],
+  drive: [
+    { t: 0.00, ox:   0, oy:   8, ang:  0.05 },
+    { t: 0.20, ox: -45, oy:  12, ang:  0.06 },   // pullback flat
+    { t: 0.50, ox:   0, oy:   0, ang:  1.57 },   // contact (vertical blade)
+    { t: 0.78, ox:  72, oy: -10, ang:  1.52 },   // drive FORWARD — almost horizontal
+    { t: 1.00, ox:   0, oy:   8, ang:  0.05 },
+  ],
+  block: [
+    { t: 0.00, ox:   0, oy:   0, ang:  1.40 },   // stays put — blade upright
+    { t: 0.50, ox:   0, oy:   0, ang:  1.40 },   // contact — no movement
+    { t: 1.00, ox:   0, oy:   0, ang:  1.40 },   // stays put
+  ],
+  flick: [
+    { t: 0.00, ox:   0, oy:   8, ang:  0.05 },
+    { t: 0.18, ox: -10, oy:  32, ang: -0.12 },   // dip DOWN first (load wrist)
+    { t: 0.50, ox:   0, oy:   0, ang:  1.05 },   // contact (wrist snap)
+    { t: 0.75, ox:  30, oy: -78, ang: -0.65 },   // snap UP dramatically
+    { t: 1.00, ox:   0, oy:   8, ang:  0.05 },
+  ],
+};
+
+// ── Outcome table ─────────────────────────────────────────────────────────────
+const OUTCOMES = {
+  topspin: {
+    loop:  { rating:'excellent', result:'win',   tip:'Match spin with spin — your loop neutralises theirs and returns heavy topspin.' },
+    push:  { rating:'wrong',     result:'net',   tip:'Pushing against topspin drives the ball into the net. The spin pulls it down.' },
+    drive: { rating:'risky',     result:'risky', tip:'Flat drive can work but demands perfect timing — any late contact goes long.' },
+    block: { rating:'good',      result:'win',   tip:'Blocking topspin redirects the energy. Keep the blade slightly closed (tilted forward).' },
+    flick: { rating:'good',      result:'win',   tip:'Flick over short topspin — snap the wrist upward and forward.' },
+  },
+  backspin: {
+    loop:  { rating:'good',      result:'win',   tip:'Looping backspin: brush steeply upward under the ball. The spin fights you but recoverable.' },
+    push:  { rating:'excellent', result:'win',   tip:'Open blade push keeps the backspin going. Guide the ball with a relaxed arm.' },
+    drive: { rating:'wrong',     result:'popup', tip:'Flat drive against backspin pops the ball up high — easy target for the opponent.' },
+    block: { rating:'wrong',     result:'net',   tip:'Blocking backspin with a closed blade sends it straight into the net.' },
+    flick: { rating:'risky',     result:'risky', tip:'Flicking backspin is high-risk. You must get under the ball precisely.' },
+  },
+};
+
+const RATING_COLOR = { excellent:'#22c55e', good:'#60a5fa', risky:'#f97316', wrong:'#ef4444' };
+const RATING_LABEL = { excellent:'EXCELLENT', good:'GOOD', risky:'RISKY', wrong:'WRONG' };
+const RESULT_LABEL = { win:'✓ GOOD RETURN', net:'✗ INTO THE NET', out:'✗ BALL OUT', popup:'△ POPPED UP', risky:'~ RISKY SHOT' };
+
+// ── State ─────────────────────────────────────────────────────────────────────
+const st = {
+  phase: 'SELECT_SPIN',  // SELECT_SPIN | SERVE_ANIM | BALL_INCOMING | SELECT_RESPONSE | RESPONSE_ANIM | OUTCOME
+  spin:  null,
+  masterT: 0, prevMasterT: 0,
+  ball: { x:0, y:0, z:TBL_H, vx:0, vy:0, vz:0, spin:0, spinAngle:0, active:false },
+  bounceFar: 0, bounceNear: 0,
+  lastBounce: null, bounceFade: 0,
+  response: null,
+  playerT: 0, contactFired: false,
+  contactPos: null,   // screen {sx, sy} at hit moment
+  outcome: null,
+  timeScale: TIME_SCALE,
+  netHit: false,      // flag to enforce 'net' result visually
+  score: 0,           // consecutive wins in current rally
+  outcomeTimer: 0,    // frames elapsed in OUTCOME phase
+};
+
+const trail = [];
+const racketTrail = [];  // ghost positions for swing trail
+const oppArmTrail = [];
+const UI = {};   // { key: {x,y,w,h} } populated each frame
+let mouseX = 0, mouseY = 0;
+let spinArrowT = 0;
+
+// Precomputed opponent shoulder screen position
+let SH = null;
+
+function initShoulder() {
+  SH = project(80, 82, TBL_D);
+}
+
+// ── State transitions ─────────────────────────────────────────────────────────
+function go(phase) {
+  st.phase = phase;
+  switch (phase) {
+    case 'SELECT_SPIN':
+      st.spin = Math.random() < 0.5 ? 'topspin' : 'backspin';
+      st.outcome = null; st.response = null;
+      st.masterT = 0; trail.length = 0;
+      ballReset();
+      go('SERVE_ANIM');
+      return;
+    case 'SERVE_ANIM':
+      st.masterT = 0; st.prevMasterT = 0;
+      st.bounceFar = 0; st.bounceNear = 0;
+      st.lastBounce = null; st.bounceFade = 0;
+      st.netHit = false;
+      trail.length = 0;
+      oppArmTrail.length = 0;
+      ballReset();
+      st.ball.x = OPP_TOSS_X; st.ball.y = 0; st.ball.z = OPP_TOSS_Z;
+      st.ball.spin = SERVES[st.spin].spin;
+      break;
+    case 'BALL_INCOMING':
+      st.timeScale = TIME_SCALE;
+      break;
+    case 'SELECT_RESPONSE':
+      st.timeScale = TIME_SCALE * 0.12;
+      break;
+    case 'RESPONSE_ANIM':
+      st.playerT = 0; st.contactFired = false;
+      st.timeScale = TIME_SCALE;
+      racketTrail.length = 0;
+      st.ball.active = false;  // freeze until applyContact reactivates
+      break;
+    case 'OUTCOME':
+      st.timeScale = TIME_SCALE;
+      st.outcomeTimer = 0;
+      if (st.outcome && st.outcome.result === 'win') st.score++;
+      else st.score = 0;
+      break;
+  }
+}
+
+function ballReset() {
+  Object.assign(st.ball, {x:0,y:0,z:TBL_H,vx:0,vy:0,vz:0,spin:0,spinAngle:0,active:false});
+}
+
+// ── Toss arc (physics coords) ─────────────────────────────────────────────────
+function tossPos(mt) {
+  const p = clamp(mt / CONTACT_MT, 0, 1);
+  return {
+    x: OPP_TOSS_X,
+    y: OPP_CONTACT_Y * p + OPP_TOSS_PEAK * 4 * p * (1 - p),
+    z: OPP_TOSS_Z,
+  };
+}
+
+// ── Ball physics ──────────────────────────────────────────────────────────────
+function updateBall() {
+  const b = st.ball;
+  if (!b.active) return;
+  const ts = st.timeScale / TIME_SCALE;
+
+  // Magnus + gravity
+  b.vy -= G * ts;
+  b.vy -= MAGNUS_C * b.spin * Math.abs(b.vz);
+  b.spin *= SPIN_DECAY_AIR;
+  b.spinAngle += b.spin * 0.00105;
+
+  // Integrate
+  b.x += b.vx * ts;
+  b.y += b.vy * ts;
+  b.z += b.vz * ts;
+
+  // Trail (skip in near-frozen slow-mo to avoid clutter)
+  if (ts > 0.2) {
+    trail.unshift({x:b.x, y:b.y, z:b.z});
+    if (trail.length > 10) trail.pop();
+  }
+
+  // Table bounce
+  if (b.y <= 0 && b.vy < 0) {
+    b.y = 0;
+    b.vy = -b.vy * COR_TABLE;
+    if (b.spin > 0) b.vz -= b.spin * SPIN_TOP_KICK;       // topspin: speed up
+    else            b.vz += Math.abs(b.spin) * SPIN_BACK_KICK;  // backspin: slow
+    b.spin *= SPIN_DECAY_TABLE;
+
+    if (b.z >= TBL_H) {
+      st.bounceFar++;
+      st.lastBounce = {x:b.x, z:b.z}; st.bounceFade = 1.0;
+    } else {
+      st.bounceNear++;
+      st.lastBounce = {x:b.x, z:b.z}; st.bounceFade = 1.0;
+      if (st.phase === 'BALL_INCOMING' && st.bounceNear === 1) {
+        go('SELECT_RESPONSE');
+      }
+      if (st.bounceNear >= 2 && (st.phase === 'BALL_INCOMING' || st.phase === 'SELECT_RESPONSE')) {
+        // Double bounce before player responds — fault
+        st.outcome = {rating:'wrong', result:'net', tip:'Double bounce on your side.'};
+        go('OUTCOME');
+      }
+    }
+  }
+
+  // Net collision — ball crossing from far to near during BALL_INCOMING
+  if (st.phase === 'BALL_INCOMING') {
+    const prevZ = b.z - b.vz * ts;
+    if (prevZ >= TBL_H && b.z < TBL_H) {
+      // Interpolate y at z=TBL_H
+      const frac = (prevZ - TBL_H) / (prevZ - b.z + 1e-6);
+      const yAtNet = (b.y - b.vy * ts) + frac * b.vy * ts;
+      if (yAtNet < NET_H) {
+        b.vz = -b.vz * COR_NET;
+        b.vy = Math.abs(b.vy) * COR_NET;
+        b.z  = TBL_H + 2;
+        b.spin *= 0.4;
+      }
+    }
+  }
+
+  // Force net hit visually for 'net' outcomes (fires during RESPONSE_ANIM or OUTCOME)
+  if ((st.phase === 'OUTCOME' || st.phase === 'RESPONSE_ANIM') && st.outcome && st.outcome.result === 'net' && !st.netHit) {
+    const prevZ = b.z - b.vz * ts;
+    if (prevZ <= TBL_H && b.z >= TBL_H) {
+      st.netHit = true;
+      b.vz = -b.vz * 0.25;
+      b.vy = b.vy * 0.2;
+      b.spin = 0;
+    }
+  }
+
+  // Clear ball when it leaves play area
+  if (st.phase === 'OUTCOME') {
+    if (b.z > TBL_D + 150 || b.z < -150 || b.y < -80) b.active = false;
+  }
+}
+
+// ── Arrow head (reused from physics-poc-2.html) ───────────────────────────────
+function arrowHead(x, y, dir, size, color) {
+  ctx.save();
+  ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.lineCap = 'round';
+  ctx.translate(x, y); ctx.rotate(dir);
+  ctx.beginPath();
+  ctx.moveTo(0, 0); ctx.lineTo(-size*0.5, -size);
+  ctx.moveTo(0, 0); ctx.lineTo( size*0.5, -size);
+  ctx.stroke();
+  ctx.restore();
+}
+
+// ── Rounded rect ──────────────────────────────────────────────────────────────
+function rRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x+r,y); ctx.lineTo(x+w-r,y); ctx.arcTo(x+w,y,x+w,y+r,r);
+  ctx.lineTo(x+w,y+h-r); ctx.arcTo(x+w,y+h,x+w-r,y+h,r);
+  ctx.lineTo(x+r,y+h); ctx.arcTo(x,y+h,x,y+h-r,r);
+  ctx.lineTo(x,y+r); ctx.arcTo(x,y,x+r,y,r);
+  ctx.closePath();
+}
+
+// ── Draw: Background ──────────────────────────────────────────────────────────
+function drawBg() {
+  const g = ctx.createRadialGradient(CX, H*0.38, 0, CX, H*0.38, W*0.72);
+  g.addColorStop(0, '#111827'); g.addColorStop(1, '#05070f');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  // Faint perspective lines
+  ctx.save(); ctx.strokeStyle='rgba(255,255,255,0.025)'; ctx.lineWidth=1;
+  [[CX-TBL_NEAR_HW, TBL_NEAR_Y],[CX+TBL_NEAR_HW, TBL_NEAR_Y]].forEach(([px,py]) => {
+    ctx.beginPath(); ctx.moveTo(CX, TBL_FAR_Y-20); ctx.lineTo(px, py); ctx.stroke();
+  });
+  ctx.restore();
+}
+
+// ── Draw: Table ───────────────────────────────────────────────────────────────
+function drawTable() {
+  const nl=project(-TBL_HW,0,0), nr=project(TBL_HW,0,0);
+  const fl=project(-TBL_HW,0,TBL_D), fr=project(TBL_HW,0,TBL_D);
+  const cl=project(-TBL_HW,0,TBL_H), cr=project(TBL_HW,0,TBL_H);
+
+  // Felt surface
+  const fg = ctx.createLinearGradient(CX,TBL_NEAR_Y, CX,TBL_FAR_Y);
+  fg.addColorStop(0,'#1e7a38'); fg.addColorStop(0.5,'#196830'); fg.addColorStop(1,'#0e3a1a');
+  ctx.fillStyle=fg;
+  ctx.beginPath();
+  ctx.moveTo(nl.sx,nl.sy); ctx.lineTo(nr.sx,nr.sy);
+  ctx.lineTo(fr.sx,fr.sy); ctx.lineTo(fl.sx,fl.sy);
+  ctx.closePath(); ctx.fill();
+
+  // Table lines
+  function line(p1,p2,w,c) {
+    ctx.strokeStyle=c; ctx.lineWidth=w;
+    ctx.beginPath(); ctx.moveTo(p1.sx,p1.sy); ctx.lineTo(p2.sx,p2.sy); ctx.stroke();
+  }
+  line(nl,nr, 2,'rgba(255,255,255,0.88)');  // near edge (bright — faces viewer)
+  line(fl,fr, 1,'rgba(255,255,255,0.45)');  // far edge
+  line(nl,fl, 1,'rgba(255,255,255,0.30)');  // left
+  line(nr,fr, 1,'rgba(255,255,255,0.30)');  // right
+  // Centre dashed line
+  ctx.save(); ctx.setLineDash([5,5]);
+  line(cl,cr, 1,'rgba(255,255,255,0.20)');
+  ctx.setLineDash([]); ctx.restore();
+
+  // Near slab (3-D edge)
+  const SLAB = 13;
+  ctx.fillStyle='#0c3018';
+  ctx.beginPath();
+  ctx.moveTo(nl.sx,nl.sy); ctx.lineTo(nr.sx,nr.sy);
+  ctx.lineTo(nr.sx,nr.sy+SLAB); ctx.lineTo(nl.sx,nl.sy+SLAB);
+  ctx.closePath(); ctx.fill();
+  ctx.strokeStyle='rgba(255,255,255,0.12)'; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(nl.sx,nl.sy+SLAB); ctx.lineTo(nr.sx,nr.sy+SLAB); ctx.stroke();
+}
+
+// ── Draw: Net ─────────────────────────────────────────────────────────────────
+function drawNet() {
+  const bl=project(-TBL_HW,0,TBL_H), br=project(TBL_HW,0,TBL_H);
+  const tl=project(-TBL_HW,NET_H,TBL_H), tr=project(TBL_HW,NET_H,TBL_H);
+
+  // Body
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(tl.sx,tl.sy); ctx.lineTo(tr.sx,tr.sy);
+  ctx.lineTo(br.sx,br.sy); ctx.lineTo(bl.sx,bl.sy);
+  ctx.closePath();
+  const ng=ctx.createLinearGradient(CX-8,0,CX+8,0);
+  ng.addColorStop(0,'#181828'); ng.addColorStop(0.5,'#23233a'); ng.addColorStop(1,'#181828');
+  ctx.fillStyle=ng; ctx.fill(); ctx.restore();
+
+  // Mesh lines
+  ctx.strokeStyle='rgba(70,70,95,0.55)'; ctx.lineWidth=0.5;
+  for (let i=1; i<=4; i++) {
+    const f=i/5;
+    ctx.beginPath();
+    ctx.moveTo(lerp(tl.sx,bl.sx,f), lerp(tl.sy,bl.sy,f));
+    ctx.lineTo(lerp(tr.sx,br.sx,f), lerp(tr.sy,br.sy,f));
+    ctx.stroke();
+  }
+  // White top tape
+  const tg=ctx.createLinearGradient(0,tl.sy-3,0,tl.sy+2);
+  tg.addColorStop(0,'#fff'); tg.addColorStop(1,'#aaa');
+  ctx.fillStyle=tg;
+  ctx.beginPath();
+  ctx.moveTo(tl.sx-2,tl.sy-2); ctx.lineTo(tr.sx+2,tr.sy-2);
+  ctx.lineTo(tr.sx+2,tr.sy+2); ctx.lineTo(tl.sx-2,tl.sy+2);
+  ctx.closePath(); ctx.fill();
+  // Posts
+  ctx.strokeStyle='#777'; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.moveTo(bl.sx,bl.sy); ctx.lineTo(tl.sx,tl.sy-3); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(br.sx,br.sy); ctx.lineTo(tr.sx,tr.sy-3); ctx.stroke();
+}
+
+// ── Draw: Bounce marker ───────────────────────────────────────────────────────
+function drawBounceMarker() {
+  if (!st.lastBounce || st.bounceFade <= 0) return;
+  const p = project(st.lastBounce.x, 0, st.lastBounce.z);
+  const color = st.spin ? SPIN_CFG[st.spin].color : '#aaa';
+  ctx.save();
+  ctx.globalAlpha = st.bounceFade * 0.8;
+  ctx.strokeStyle = color; ctx.lineWidth = 1.5 * p.scale;
+  ctx.beginPath(); ctx.ellipse(p.sx,p.sy, 14*p.scale,5*p.scale, 0,0,Math.PI*2); ctx.stroke();
+  ctx.globalAlpha = st.bounceFade * 0.4;
+  ctx.fillStyle = color;
+  ctx.beginPath(); ctx.ellipse(p.sx,p.sy, 3*p.scale,1.5*p.scale, 0,0,Math.PI*2); ctx.fill();
+  ctx.restore();
+}
+
+// ── Draw: Ball shadow ─────────────────────────────────────────────────────────
+function drawShadow() {
+  const b = st.ball;
+  if (!b.active && st.phase !== 'SERVE_ANIM') return;
+  const sp = project(b.x, 0, b.z);
+  const alpha = Math.max(0, 0.5 * (1 - b.y / 200));
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = '#000';
+  ctx.beginPath();
+  ctx.ellipse(sp.sx, sp.sy, 18*sp.scale, 5*sp.scale, 0, 0, Math.PI*2);
+  ctx.fill();
+  ctx.restore();
+}
+
+// ── Draw: Ball trail ──────────────────────────────────────────────────────────
+function drawTrail() {
+  if (trail.length < 2) return;
+  const color = st.spin ? SPIN_CFG[st.spin].color : '#888';
+  for (let i = trail.length-1; i >= 0; i--) {
+    const p = project(trail[i].x, trail[i].y, trail[i].z);
+    const frac = 1 - i/trail.length;
+    const r = 9 * p.scale * frac * 0.7;
+    if (r < 0.4) continue;
+    ctx.save(); ctx.globalAlpha = frac * 0.55;
+    ctx.fillStyle = color;
+    ctx.beginPath(); ctx.arc(p.sx, p.sy, r, 0, Math.PI*2); ctx.fill();
+    ctx.restore();
+  }
+}
+
+// ── Draw: Ball (reused from physics-poc-2.html) ───────────────────────────────
+function drawBall() {
+  const b = st.ball;
+  if (!b.active && st.phase !== 'SERVE_ANIM') return;
+  const p = project(b.x, b.y, b.z);
+  const r = 10 * p.scale;
+  if (r < 1) return;
+
+  // Body
+  const g = ctx.createRadialGradient(p.sx-r*0.30,p.sy-r*0.30,r*0.04,p.sx,p.sy,r);
+  g.addColorStop(0,'#ffffff'); g.addColorStop(0.5,'#edeff2'); g.addColorStop(1,'#b0b8c4');
+  ctx.fillStyle=g;
+  ctx.beginPath(); ctx.arc(p.sx,p.sy,r,0,Math.PI*2); ctx.fill();
+
+  // Fixed seam
+  ctx.save(); ctx.translate(p.sx,p.sy);
+  ctx.beginPath(); ctx.arc(0,0,r,0,Math.PI*2); ctx.clip();
+  ctx.strokeStyle='rgba(140,150,165,0.45)'; ctx.lineWidth=0.8*p.scale;
+  ctx.beginPath(); ctx.ellipse(0,0,r*0.92,r*0.18,0,0,Math.PI*2); ctx.stroke();
+  ctx.restore();
+
+  // Specular
+  const sp=ctx.createRadialGradient(p.sx-r*0.28,p.sy-r*0.30,0,p.sx,p.sy,r);
+  sp.addColorStop(0,'rgba(255,255,255,0.75)'); sp.addColorStop(0.35,'rgba(255,255,255,0)');
+  ctx.fillStyle=sp; ctx.beginPath(); ctx.arc(p.sx,p.sy,r,0,Math.PI*2); ctx.fill();
+  ctx.strokeStyle='rgba(90,110,135,0.35)'; ctx.lineWidth=0.7;
+  ctx.beginPath(); ctx.arc(p.sx,p.sy,r,0,Math.PI*2); ctx.stroke();
+
+  // Spin ring (arc + arrowhead, reused from physics-poc-2.html)
+  const spinShowPhase = st.phase==='SERVE_ANIM'||st.phase==='BALL_INCOMING'||st.phase==='SELECT_RESPONSE';
+  if (Math.abs(b.spin) > 2 && spinShowPhase) {
+    const alpha = clamp(Math.abs(b.spin)/26, 0, 0.95);
+    const R = r + Math.max(5, 8*p.scale);
+    const ccw = b.spin < 0;
+    const color = b.spin > 0 ? '#ff6b9d' : '#4dd4f0';
+    ctx.save(); ctx.globalAlpha = alpha;
+    ctx.strokeStyle=color; ctx.lineWidth=Math.max(1.5,2.5*p.scale);
+    ctx.beginPath(); ctx.arc(p.sx,p.sy,R,-Math.PI*0.65,Math.PI*0.65,ccw); ctx.stroke();
+    const tipA = ccw ? -Math.PI*0.65 : Math.PI*0.65;
+    const tipDir = ccw ? tipA - Math.PI/2 : tipA + Math.PI/2;
+    arrowHead(p.sx+Math.cos(tipA)*R, p.sy+Math.sin(tipA)*R, tipDir, Math.max(4,7*p.scale), color);
+    ctx.restore();
+  }
+
+  // Comet trail dots (reused from tt-game-poc.html)
+  if (Math.abs(b.spin) > 2 && spinShowPhase) {
+    const col = b.spin>0 ? [255,107,157] : [77,212,240];
+    const orbitR = r * 0.68;
+    const TRAIL = 5;
+    for (let i=TRAIL; i>=0; i--) {
+      const ang = b.spinAngle - Math.sign(b.spin)*i*0.44;
+      const tx = p.sx + Math.cos(ang)*orbitR;
+      const ty = p.sy + Math.sin(ang)*orbitR;
+      const frac = 1 - i/TRAIL;
+      const dotR = i===0 ? 2.2*p.scale : 1.4*frac*p.scale+0.2;
+      ctx.save(); ctx.globalAlpha = i===0 ? Math.max(0.5,frac) : frac*0.8;
+      ctx.fillStyle=`rgb(${col[0]},${col[1]},${col[2]})`;
+      ctx.beginPath(); ctx.arc(tx,ty, Math.max(0.4,dotR), 0,Math.PI*2); ctx.fill();
+      ctx.restore();
+    }
+  }
+}
+
+// ── Draw: Racket ghost (swing trail) ─────────────────────────────────────────
+function drawRacketGhost(rx, ry, ang, alpha, s=1.0) {
+  ctx.save(); ctx.globalAlpha = alpha;
+  ctx.translate(rx, ry); ctx.rotate(ang);
+  ctx.strokeStyle = '#b0c4de'; ctx.lineWidth = Math.max(0.5, 1.2*s);
+  ctx.beginPath(); ctx.ellipse(0, 0, BLD_RX*s, BLD_RY*s, 0, 0, Math.PI*2); ctx.stroke();
+  ctx.strokeStyle = '#8899aa'; ctx.lineWidth = Math.max(0.5, 2*s);
+  ctx.beginPath();
+  ctx.moveTo(0, BLD_H/2*s); ctx.lineTo(0, (BLD_H/2 + HDL_L*0.5)*s); ctx.stroke();
+  ctx.restore();
+}
+
+// ── Draw: Racket (reused from physics-poc-2.html) ────────────────────────────
+function drawRacket(rx, ry, ang, s) {
+  s = s || 1.0;
+  ctx.save(); ctx.translate(rx,ry); ctx.rotate(ang); ctx.scale(s,s);
+
+  const bh=BLD_H, rx2=BLD_RX, ry2=BLD_RY, hw=HDL_W, hl=HDL_L;
+  const hStartY = bh/2;
+
+  // Handle wood
+  const hg=ctx.createLinearGradient(-hw/2,0,hw/2,0);
+  hg.addColorStop(0,'#5c2c0a'); hg.addColorStop(0.35,'#8c4c1e');
+  hg.addColorStop(0.65,'#a05c24'); hg.addColorStop(1,'#5c2c0a');
+  ctx.fillStyle=hg;
+  ctx.beginPath();
+  ctx.moveTo(-hw/2+2,hStartY); ctx.lineTo(hw/2-2,hStartY);
+  ctx.arcTo(hw/2,hStartY,hw/2,hStartY+3,2); ctx.lineTo(hw/2,hStartY+hl-4);
+  ctx.arcTo(hw/2,hStartY+hl,hw/2-4,hStartY+hl,4); ctx.lineTo(-hw/2+4,hStartY+hl);
+  ctx.arcTo(-hw/2,hStartY+hl,-hw/2,hStartY+hl-4,4); ctx.lineTo(-hw/2,hStartY+3);
+  ctx.arcTo(-hw/2,hStartY,-hw/2+2,hStartY,2); ctx.closePath(); ctx.fill();
+
+  ctx.strokeStyle='rgba(0,0,0,0.20)'; ctx.lineWidth=2; ctx.lineCap='butt';
+  for (let i=1;i<=5;i++) {
+    const gy=hStartY+hl*(i/6);
+    ctx.beginPath(); ctx.moveTo(-hw/2+1,gy); ctx.lineTo(hw/2-1,gy); ctx.stroke();
+  }
+
+  // Blade back
+  ctx.fillStyle='#1a1a1a';
+  ctx.beginPath(); ctx.ellipse(0,0,rx2+2,ry2+2,0,0,Math.PI*2); ctx.fill();
+
+  // White tape
+  ctx.strokeStyle='rgba(245,245,245,0.80)'; ctx.lineWidth=3.5;
+  ctx.beginPath(); ctx.ellipse(0,0,rx2+0.5,ry2+0.5,0,0,Math.PI*2); ctx.stroke();
+
+  // Red rubber
+  const rg=ctx.createRadialGradient(-rx2*0.28,-ry2*0.22,rx2*0.05,0,0,rx2*1.1);
+  rg.addColorStop(0,'#f04848'); rg.addColorStop(0.55,'#cc1c10'); rg.addColorStop(1,'#880c08');
+  ctx.fillStyle=rg;
+  ctx.beginPath(); ctx.ellipse(0,0,rx2-1,ry2-1,0,0,Math.PI*2); ctx.fill();
+
+  // Pimple texture
+  ctx.save(); ctx.beginPath(); ctx.ellipse(0,0,rx2-1,ry2-1,0,0,Math.PI*2); ctx.clip();
+  ctx.fillStyle='rgba(0,0,0,0.11)';
+  for (let px=-rx2+3;px<=rx2-3;px+=4.5)
+    for (let py=-ry2+3;py<=ry2-3;py+=4.5)
+      if ((px/rx2)**2+(py/ry2)**2<0.88) {
+        ctx.beginPath(); ctx.arc(px,py,1.1,0,Math.PI*2); ctx.fill();
+      }
+  ctx.restore();
+
+  // Specular
+  const sg=ctx.createRadialGradient(-rx2*0.32,-ry2*0.28,0,0,0,rx2);
+  sg.addColorStop(0,'rgba(255,140,120,0.32)'); sg.addColorStop(0.45,'rgba(255,60,40,0.00)');
+  ctx.fillStyle=sg;
+  ctx.beginPath(); ctx.ellipse(0,0,rx2-1,ry2-1,0,0,Math.PI*2); ctx.fill();
+
+  ctx.restore();
+}
+
+// ── Draw: Arm segments (reused from physics-poc-2.html) ───────────────────────
+function drawArmSegs(shX,shY, elX,elY, wrX,wrY, s) {
+  function limb(x1,y1,x2,y2,thick) {
+    const t=thick*s;
+    ctx.strokeStyle='#7a4020'; ctx.lineWidth=t+3*s; ctx.lineCap='round';
+    ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+    ctx.strokeStyle='#c47038'; ctx.lineWidth=t; ctx.lineCap='round';
+    ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+    const dx=x2-x1,dy=y2-y1,len=Math.hypot(dx,dy)||1;
+    const nx=-dy/len,ny=dx/len,ho=-t*0.18;
+    ctx.strokeStyle='#dc9050'; ctx.lineWidth=t*0.40; ctx.lineCap='round';
+    ctx.beginPath(); ctx.moveTo(x1+nx*ho,y1+ny*ho); ctx.lineTo(x2+nx*ho,y2+ny*ho); ctx.stroke();
+  }
+  function joint(jx,jy,r) {
+    const jr=r*s;
+    ctx.fillStyle='#8a4820'; ctx.beginPath(); ctx.arc(jx,jy,jr+3*s,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#c47038'; ctx.beginPath(); ctx.arc(jx,jy,jr,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#dc9050'; ctx.beginPath(); ctx.arc(jx-jr*0.28,jy-jr*0.28,jr*0.40,0,Math.PI*2); ctx.fill();
+  }
+  limb(shX,shY,elX,elY,26);
+  limb(elX,elY,wrX,wrY,20);
+  joint(elX,elY,9); joint(wrX,wrY,7);
+}
+
+// ── Draw: Opponent arm + racket ───────────────────────────────────────────────
+function drawOpponentArm() {
+  let oppAlpha = 1.0;
+  if (st.phase === 'BALL_INCOMING') oppAlpha = 0.30;
+  else if (st.phase === 'SELECT_SPIN' || st.phase === 'SELECT_RESPONSE') return;
+  if (!SH || !st.spin) return;
+
+  ctx.save(); ctx.globalAlpha = oppAlpha;
+
+  const kfs = OPP_KFS[st.spin];
+  const t = st.masterT;
+  const kf = lerpKF(kfs, t);
+
+  const armS = SH.scale * 2.8;  // scale up for visibility
+  const racketSX = SH.sx + kf.dx;
+  const racketSY = SH.sy + kf.dy;
+  const ang = kf.angle + kf.palmRot;
+
+  // Record trail during active swing phase
+  if (st.phase === 'SERVE_ANIM' && st.masterT > 0.18 && st.masterT < 0.82) {
+    oppArmTrail.push({rx: racketSX, ry: racketSY, ang, s: armS});
+    if (oppArmTrail.length > 20) oppArmTrail.shift();
+  }
+
+  // Draw ghost trail before arm
+  if (oppArmTrail.length > 1) {
+    for (let i = 0; i < oppArmTrail.length; i++) {
+      const pt = oppArmTrail[i];
+      const frac = (i + 1) / oppArmTrail.length;
+      drawRacketGhost(pt.rx, pt.ry, pt.ang, frac * 0.28, pt.s);
+    }
+  }
+
+  // Wrist position (arm angle determines forearm direction)
+  const wrX = racketSX + (-Math.sin(ang)) * WRIST_D * armS;
+  const wrY = racketSY + ( Math.cos(ang)) * WRIST_D * armS;
+
+  // Elbow: perpendicular bulge from mid-point of shoulder→wrist
+  const midX = (SH.sx+wrX)/2, midY = (SH.sy+wrY)/2;
+  const dxEl = wrX-SH.sx, dyEl = wrY-SH.sy;
+  const lenEl = Math.hypot(dxEl,dyEl)||1;
+  const elX = midX + (-dyEl/lenEl)*14*armS;
+  const elY = midY + ( dxEl/lenEl)*14*armS;
+
+  drawArmSegs(SH.sx,SH.sy, elX,elY, wrX,wrY, armS);
+
+  // Draw hand grip (adapted from physics-poc-2.html drawArm)
+  ctx.save();
+  ctx.translate(wrX, wrY); ctx.rotate(ang); ctx.scale(armS, armS);
+  const pg=ctx.createRadialGradient(-5,2,1,3,6,20);
+  pg.addColorStop(0,'#d08848'); pg.addColorStop(0.5,'#c07038'); pg.addColorStop(1,'#9a4e24');
+  ctx.fillStyle=pg;
+  ctx.beginPath(); ctx.ellipse(0,11,12,18,0,0,Math.PI*2); ctx.fill();
+  for (let i=0;i<4;i++) {
+    ctx.fillStyle=i%2===0?'#b86030':'#ca7a42';
+    ctx.beginPath(); ctx.arc((i-1.5)*5.6,-4,4,0,Math.PI*2); ctx.fill();
+  }
+  ctx.strokeStyle='#985020'; ctx.lineWidth=9; ctx.lineCap='round';
+  ctx.beginPath(); ctx.moveTo(-9,5); ctx.lineTo(-18,-4); ctx.stroke();
+  ctx.strokeStyle='#ba6530'; ctx.lineWidth=6;
+  ctx.beginPath(); ctx.moveTo(-9,5); ctx.lineTo(-18,-4); ctx.stroke();
+  ctx.restore();
+
+  drawRacket(racketSX, racketSY, ang, armS);
+
+  ctx.restore();
+}
+
+// ── Draw: Player racket ───────────────────────────────────────────────────────
+function drawPlayerRacket() {
+  if (st.phase==='SELECT_SPIN') return;
+
+  let rx, ry, ang;
+  const rest = project(75, 48, 18);
+
+  if (st.phase==='RESPONSE_ANIM' && st.response) {
+    const kfs = PLAYER_KFS[st.response.id];
+    const kf = lerpKF(kfs, st.playerT);
+
+    // Before contact: racket chases ball's current screen pos; after: stays at contact pos
+    let baseX, baseY;
+    if (st.playerT < PLAYER_CONTACT_T && !st.contactFired) {
+      const bp = project(st.ball.x, st.ball.y, st.ball.z);
+      baseX = bp.sx; baseY = bp.sy;
+    } else {
+      baseX = st.contactPos ? st.contactPos.sx : rest.sx;
+      baseY = st.contactPos ? st.contactPos.sy : rest.sy;
+    }
+    rx  = baseX + kf.ox;
+    ry  = baseY + kf.oy;
+    ang = kf.ang;
+
+    // Record trail during active swing (skip the very start/end near-rest positions)
+    if (st.playerT > 0.08 && st.playerT < 0.88) {
+      racketTrail.push({rx, ry, ang});
+      if (racketTrail.length > 22) racketTrail.shift();
+    }
+  } else if (st.phase==='OUTCOME' && st.contactPos) {
+    // Racket lingers at contact then returns to rest
+    const f = clamp(1 - (st.playerT - 1.0)*2, 0, 1);
+    rx  = lerp(rest.sx, st.contactPos.sx, f);
+    ry  = lerp(rest.sy, st.contactPos.sy, f);
+    ang = -0.30;
+  } else {
+    rx  = rest.sx; ry = rest.sy; ang = -0.30;
+  }
+
+  // Draw swing ghost trail (fades from old → recent)
+  if (racketTrail.length > 1 && (st.phase==='RESPONSE_ANIM' || st.phase==='OUTCOME')) {
+    for (let i = 0; i < racketTrail.length; i++) {
+      const pt = racketTrail[i];
+      const frac = (i + 1) / racketTrail.length;  // 0 = oldest, 1 = newest
+      drawRacketGhost(pt.rx, pt.ry, pt.ang, frac * 0.32);
+    }
+  }
+
+  drawRacket(rx, ry, ang, 1.0);
+}
+
+// ── Apply response contact velocities ────────────────────────────────────────
+function applyContact() {
+  const od = OUTCOMES[st.spin][st.response.id];
+  st.outcome = od;
+  const b = st.ball;
+
+  // Fix contact position for consistent trajectories (net at z=274, TBL_D=548)
+  b.z = 80; b.y = 18; b.x = st.ball.x;
+  st.bounceNear = 0;  // player hit it; reset near-side count
+
+  switch (od.result) {
+    case 'win':
+      // Clears net (y≈88 at z=274), lands at z≈384 on opponent's side
+      b.vz = +5.0; b.vy = 5.5; b.vx = 0;
+      b.spin = st.response.id==='push' ? -12 : st.response.id==='loop' ? 18 : 8;
+      break;
+    case 'net':
+      // Reaches net at y≈22 (below NET_H=30.5), force-net-hit fires
+      b.vz = +5.0; b.vy = 3.8; b.vx = 0; b.spin = 0;
+      break;
+    case 'out':
+      // Clears net (y≈82), lands at z≈595 past table end (548)
+      b.vz = +9.0; b.vy = 5.0; b.vx = 0; b.spin = 5;
+      break;
+    case 'popup':
+      // Goes way up (peak y≈250), drifts over net, lands at z≈285 (easy smash)
+      b.vz = +2.0; b.vy = 9.5; b.vx = 0; b.spin = 0;
+      break;
+    case 'risky': {
+      const good = Math.random() > 0.4;
+      b.vz = good ? +5.0 : +9.5;
+      b.vy = good ? 5.3  : 4.5;
+      b.vx = 0; b.spin = 4;
+      break;
+    }
+  }
+  b.active = true;
+  st.netHit = false;
+  trail.length = 0;
+}
+
+// ── UI: hit test ──────────────────────────────────────────────────────────────
+function hit(x, y, r) { return r && x>=r.x && x<=r.x+r.w && y>=r.y && y<=r.y+r.h; }
+
+// ── UI: draw spin selection ───────────────────────────────────────────────────
+function drawSelectSpin() {
+  // No-op: SELECT_SPIN immediately transitions to SERVE_ANIM
+}
+
+// ── UI: draw response panel ───────────────────────────────────────────────────
+function drawResponsePanel() {
+  const panelY=H-158, panelH=158;
+
+  // Dark panel
+  ctx.fillStyle='rgba(6,9,22,0.93)'; ctx.fillRect(0,panelY,W,panelH);
+  ctx.strokeStyle='rgba(255,255,255,0.10)'; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(0,panelY); ctx.lineTo(W,panelY); ctx.stroke();
+
+  // Header
+  ctx.save();
+  ctx.font='bold 14px -apple-system,sans-serif'; ctx.fillStyle='rgba(255,255,255,0.85)';
+  ctx.textAlign='center'; ctx.textBaseline='top';
+  ctx.fillText('How do you respond?', CX, panelY+10);
+  ctx.restore();
+
+  const bW=138, bH=62, bGap=12;
+  const totalBW=RESPONSES.length*bW+(RESPONSES.length-1)*bGap;
+  const bStartX=CX-totalBW/2;
+  const bY=panelY+36;
+  const col = st.spin ? SPIN_CFG[st.spin].color : '#6688aa';
+
+  RESPONSES.forEach((r,i) => {
+    const bx=bStartX+i*(bW+bGap);
+    const hov=mouseX>=bx&&mouseX<=bx+bW&&mouseY>=bY&&mouseY<=bY+bH;
+    UI['resp_'+r.id]={x:bx,y:bY,w:bW,h:bH};
+
+    ctx.save();
+    ctx.fillStyle=hov?'#1c2a3a':'#101826'; ctx.globalAlpha=hov?1.0:0.90;
+    rRect(bx,bY,bW,bH,8); ctx.fill();
+    ctx.strokeStyle=hov?col:col+'50'; ctx.lineWidth=hov?1.8:1;
+    rRect(bx,bY,bW,bH,8); ctx.stroke();
+    ctx.restore();
+
+    ctx.save();
+    ctx.font='20px -apple-system,sans-serif'; ctx.fillStyle=hov?'#fff':'rgba(200,212,232,0.9)';
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(r.icon, bx+bW/2, bY+22);
+    ctx.font='bold 11px -apple-system,sans-serif'; ctx.fillStyle=hov?'#fff':'rgba(155,172,200,0.85)';
+    ctx.fillText(r.label, bx+bW/2, bY+44);
+    ctx.restore();
+  });
+}
+
+// ── UI: draw outcome ──────────────────────────────────────────────────────────
+function drawOutcome() {
+  if (!st.outcome) return;
+  const od=st.outcome;
+  const rc=RATING_COLOR[od.rating]||'#888';
+
+  if (od.result === 'win') {
+    // ── Compact win flash — auto-advances, shows countdown ──
+    ctx.save();
+    ctx.fillStyle='rgba(4,7,18,0.55)';
+    ctx.fillRect(0, 0, W, 90);
+    ctx.restore();
+
+    ctx.save();
+    ctx.font='bold 36px -apple-system,sans-serif'; ctx.fillStyle=rc;
+    ctx.textAlign='left'; ctx.textBaseline='middle';
+    ctx.fillText(RATING_LABEL[od.rating], 24, 34);
+    ctx.restore();
+
+    ctx.save();
+    ctx.font='13px -apple-system,sans-serif'; ctx.fillStyle='rgba(180,200,220,0.80)';
+    ctx.textAlign='left'; ctx.textBaseline='middle';
+    ctx.fillText('Rally: ' + st.score, 24, 62);
+    ctx.restore();
+
+    // Countdown bar (right side)
+    const barW=120, barH=6, barX=W-barW-24, barY=34;
+    const frac=1 - st.outcomeTimer/RALLY_AUTO;
+    ctx.save();
+    ctx.fillStyle='rgba(255,255,255,0.12)';
+    rRect(barX, barY, barW, barH, 3); ctx.fill();
+    ctx.fillStyle=rc+'bb';
+    rRect(barX, barY, barW*frac, barH, 3); ctx.fill();
+    ctx.font='11px -apple-system,sans-serif'; ctx.fillStyle='rgba(180,200,220,0.60)';
+    ctx.textAlign='right'; ctx.textBaseline='middle';
+    ctx.fillText('Opponent returning…', barX+barW, barY+barH+14);
+    ctx.restore();
+
+  } else {
+    // ── Full loss screen ──
+    ctx.fillStyle='rgba(4,7,18,0.82)'; ctx.fillRect(0,0,W,H);
+
+    ctx.save();
+    ctx.font='bold 52px -apple-system,sans-serif'; ctx.fillStyle=rc;
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(RATING_LABEL[od.rating]||od.rating, CX, H/2-80);
+    ctx.restore();
+
+    // Reveal the spin
+    if (st.spin) {
+      const cfg=SPIN_CFG[st.spin];
+      ctx.save();
+      ctx.font='13px -apple-system,sans-serif'; ctx.fillStyle=cfg.color+'cc';
+      ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.fillText('It was ' + SERVES[st.spin].label.toLowerCase(), CX, H/2-52);
+      ctx.restore();
+    }
+
+    if (od.result && RESULT_LABEL[od.result]) {
+      ctx.save();
+      ctx.font='16px -apple-system,sans-serif'; ctx.fillStyle='rgba(200,212,230,0.82)';
+      ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.fillText(RESULT_LABEL[od.result], CX, H/2-30);
+      ctx.restore();
+    }
+
+    // Rally total
+    if (st.score > 0) {
+      ctx.save();
+      ctx.font='13px -apple-system,sans-serif'; ctx.fillStyle='rgba(150,170,200,0.70)';
+      ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.fillText('Rally ended at ' + st.score + ' shot' + (st.score===1?'':'s'), CX, H/2-10);
+      ctx.restore();
+    }
+
+    // Tip text (word-wrap)
+    if (od.tip) {
+      const words=od.tip.split(' ');
+      const lines=[]; let cur='';
+      for (const w of words) {
+        if ((cur+' '+w).trim().length>62) { lines.push(cur.trim()); cur=w; }
+        else cur=(cur+' '+w).trim();
+      }
+      if (cur) lines.push(cur);
+      ctx.save();
+      ctx.font='italic 13px -apple-system,sans-serif'; ctx.fillStyle='rgba(155,170,200,0.85)';
+      ctx.textAlign='center'; ctx.textBaseline='top';
+      const tipY = H/2 + (st.score>0 ? 12 : 0);
+      lines.forEach((l,i) => ctx.fillText(l, CX, tipY+i*19));
+      ctx.restore();
+    }
+
+    // Buttons
+    const bW=158, bH=44, bY=H/2+70+(od.tip?22:0);
+    [[CX-bW-12,'Try Again','try_again'],[CX+12,'New Serve','new_serve']].forEach(([bx,label,id])=>{
+      const hov=mouseX>=bx&&mouseX<=bx+bW&&mouseY>=bY&&mouseY<=bY+bH;
+      UI[id]={x:bx,y:bY,w:bW,h:bH};
+      ctx.save();
+      ctx.fillStyle=hov?'#1c2a3a':'#10182a'; ctx.globalAlpha=hov?1.0:0.85;
+      rRect(bx,bY,bW,bH,10); ctx.fill();
+      ctx.strokeStyle=hov?'#6699cc':'#2a3a55'; ctx.lineWidth=hov?1.5:1;
+      rRect(bx,bY,bW,bH,10); ctx.stroke();
+      ctx.fillStyle=hov?'#fff':'#aabccc';
+      ctx.font='bold 13px -apple-system,sans-serif';
+      ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.fillText(label, bx+bW/2, bY+bH/2);
+      ctx.restore();
+    });
+  }
+}
+
+// ── UI: in-play HUD ───────────────────────────────────────────────────────────
+function drawHUD() {
+  if (st.phase==='SERVE_ANIM'||st.phase==='BALL_INCOMING') {
+    ctx.save();
+    ctx.font='bold 12px -apple-system,sans-serif'; ctx.fillStyle='rgba(255,255,255,0.35)';
+    ctx.textAlign='center'; ctx.textBaseline='top';
+    ctx.fillText('Read the spin…', CX, 16);
+    ctx.restore();
+  }
+  if (st.phase==='RESPONSE_ANIM' && st.response) {
+    ctx.save();
+    ctx.font='bold 12px -apple-system,sans-serif'; ctx.fillStyle='rgba(170,185,210,0.8)';
+    ctx.textAlign='left'; ctx.textBaseline='top';
+    ctx.fillText('Response: '+st.response.label, 16, 16);
+    if (st.response.swingLabel) {
+      ctx.font='12px -apple-system,sans-serif'; ctx.fillStyle='rgba(140,165,210,0.65)';
+      ctx.fillText(st.response.swingLabel, 16, 34);
+    }
+    ctx.restore();
+  }
+  // Rally score
+  if (st.score > 0) {
+    ctx.save();
+    ctx.font='bold 12px -apple-system,sans-serif'; ctx.fillStyle='rgba(255,255,255,0.50)';
+    ctx.textAlign='right'; ctx.textBaseline='top';
+    ctx.fillText('Rally: ' + st.score, W-16, 16);
+    ctx.restore();
+  }
+}
+
+// ── Main UI dispatcher ────────────────────────────────────────────────────────
+function drawUI() {
+  spinArrowT += 0.04;
+  switch (st.phase) {
+    case 'SELECT_SPIN':     drawSelectSpin();    break;
+    case 'SELECT_RESPONSE': drawResponsePanel(); break;
+    case 'OUTCOME':         drawOutcome();       break;
+    default:                drawHUD();           break;
+  }
+}
+
+// ── Main loop ─────────────────────────────────────────────────────────────────
+function loop() {
+  requestAnimationFrame(loop);
+
+  if (st.bounceFade > 0) st.bounceFade -= 0.013;
+
+  switch (st.phase) {
+
+    case 'SERVE_ANIM': {
+      st.prevMasterT = st.masterT;
+      st.masterT = Math.min(st.masterT + 1/MASTER_FRAMES, 1.0);
+
+      if (st.masterT < CONTACT_MT) {
+        // Hold ball on toss arc; ramp up spin for visual effect
+        const tp = tossPos(st.masterT);
+        st.ball.x=tp.x; st.ball.y=tp.y; st.ball.z=tp.z;
+        st.ball.spin = SERVES[st.spin].spin;
+        st.ball.spinAngle += st.ball.spin * 0.00105;
+        st.ball.active = false;
+      }
+
+      // Fire ball at contact moment
+      if (st.prevMasterT < CONTACT_MT && st.masterT >= CONTACT_MT) {
+        const sv = SERVES[st.spin];
+        st.ball.vx=sv.launchVx; st.ball.vy=sv.launchVy; st.ball.vz=sv.launchVz;
+        st.ball.spin=sv.spin;
+        st.ball.active=true;
+        trail.length=0;
+      }
+
+      if (st.masterT >= CONTACT_MT) updateBall();
+
+      if (st.masterT >= 0.75) go('BALL_INCOMING');
+      break;
+    }
+
+    case 'BALL_INCOMING':
+    case 'SELECT_RESPONSE':
+      updateBall();
+      break;
+
+    case 'RESPONSE_ANIM': {
+      st.playerT = Math.min(st.playerT + 1/PLAYER_FRAMES, 1.0);
+
+      if (!st.contactFired && st.playerT >= PLAYER_CONTACT_T) {
+        st.contactFired = true;
+        const p = project(st.ball.x, st.ball.y, st.ball.z);
+        st.contactPos = {sx:p.sx, sy:p.sy};
+        applyContact();
+      }
+      updateBall();
+      if (st.playerT >= 1.0) go('OUTCOME');
+      break;
+    }
+
+    case 'OUTCOME':
+      updateBall();
+      if (st.outcome && st.outcome.result === 'win') {
+        st.outcomeTimer++;
+        if (st.outcomeTimer >= RALLY_AUTO) go('SELECT_SPIN');
+      }
+      break;
+  }
+
+  // ── Render ──────────────────────────────────────────────────────────────────
+  drawBg();
+  drawTable();
+  drawNet();
+  drawBounceMarker();
+  drawShadow();
+  drawTrail();
+  drawOpponentArm();
+  if (st.ball.active || st.phase==='SERVE_ANIM') drawBall();
+  drawPlayerRacket();
+  drawUI();
+
+  // Update cursor
+  let overBtn = false;
+  for (const r of Object.values(UI)) { if (hit(mouseX,mouseY,r)) { overBtn=true; break; } }
+  canvas.style.cursor = overBtn ? 'pointer' : 'default';
+}
+
+// ── Input ─────────────────────────────────────────────────────────────────────
+canvas.addEventListener('mousemove', e => {
+  const r=canvas.getBoundingClientRect();
+  mouseX=e.clientX-r.left; mouseY=e.clientY-r.top;
+});
+
+canvas.addEventListener('click', e => {
+  const r=canvas.getBoundingClientRect();
+  const cx=e.clientX-r.left, cy=e.clientY-r.top;
+
+  switch (st.phase) {
+    case 'SELECT_RESPONSE':
+      for (const r of RESPONSES) {
+        if (hit(cx,cy,UI['resp_'+r.id])) { st.response=r; go('RESPONSE_ANIM'); break; }
+      }
+      break;
+    case 'OUTCOME':
+      if (hit(cx,cy,UI.try_again)) go('SERVE_ANIM');
+      if (hit(cx,cy,UI.new_serve)) go('SELECT_SPIN');
+      break;
+  }
+});
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+initShoulder();
+go('SELECT_SPIN');
+loop();
+</script>
+</body>
+</html>

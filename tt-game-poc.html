@@ -1,0 +1,828 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Table Tennis Game PoC</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0f0f1a; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; font-family: 'Courier New', monospace; overflow: hidden; }
+  canvas { display: block; }
+  #info { color: #555; font-size: 11px; margin-top: 6px; text-align: center; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="info">P1: W/S move · 1-5 spin | P2: ↑/↓ move · 6-0 spin | SPACE serve</div>
+<script>
+// ── Canvas Setup ──────────────────────────────────────────────────────────────
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+const W = 900, H = 500;
+canvas.width = W;
+canvas.height = H;
+
+// ── Physics Constants ─────────────────────────────────────────────────────────
+const SCALE       = 200;           // px per meter
+const FPS         = 60;
+const TIME_SCALE  = 1 / 3;         // global speed multiplier (1 = realtime, 1/3 = slow)
+const G           = 9.81 * SCALE / (FPS * FPS) * TIME_SCALE;  // gravity px/frame²
+const BALL_R      = 12;
+const TABLE_W     = 548;           // 2.74 m
+const TABLE_H_PX  = 24;           // table slab height in pixels (visual thickness)
+const NET_H_PX    = 31;           // 15.25 cm
+const NET_W       = 4;
+const TABLE_COR   = 0.89;
+const NET_COR     = 0.40;
+const PADDLE_COR  = 0.82;
+const DRAG_C      = 0.0002;
+const SPIN_DECAY_AIR   = 0.9978;
+const SPIN_DECAY_TABLE = 0.55;
+const MAGNUS_C    = 0.00045;
+const TABLE_FRICTION   = 0.12;
+const BASE_SPIN   = 18;
+const PADDLE_H    = 70;
+const PADDLE_W    = 10;
+const PADDLE_SPEED = 5 * TIME_SCALE;
+
+// ── Layout ───────────────────────────────────────────────────────────────────
+const TABLE_LEFT  = (W - TABLE_W) / 2;      // px
+const TABLE_RIGHT = TABLE_LEFT + TABLE_W;
+const TABLE_SURF  = H - 120;                 // Y of table surface on screen
+const NET_X       = TABLE_LEFT + TABLE_W / 2;
+const P1_X        = TABLE_LEFT - 20;
+const P2_X        = TABLE_RIGHT + 20;
+
+// Canonical physics: x=0 at TABLE_LEFT, y=0 at table surface, z=0 center
+// screenX = TABLE_LEFT + ball.x
+// screenY = TABLE_SURF  - ball.y  (y↑ = screen↓)
+
+// ── Spin Mode Colors & Labels ─────────────────────────────────────────────────
+const SPIN_CONFIG = {
+  flat:       { color: '#888',    label: 'FLAT' },
+  topspin:    { color: '#ff6b9d', label: 'TOP'  },
+  backspin:   { color: '#4dd4f0', label: 'BACK' },
+  'side-left':  { color: '#a3e635', label: 'SL'  },
+  'side-right': { color: '#f97316', label: 'SR'  },
+};
+
+// ── State ────────────────────────────────────────────────────────────────────
+let gameState = 'waiting'; // waiting | serving | rally | point | gameover
+
+const ball = {
+  x: 0, y: 0, z: 0,
+  vx: 0, vy: 0, vz: 0,
+  spin: { z: 0, y: 0 },
+  angle: 0,   // accumulated rotation angle for spin.z (topspin/backspin)
+  angleY: 0,  // accumulated rotation angle for spin.y (sidespin)
+  radius: BALL_R,
+  inPlay: false,
+  netFaultFrom: null,   // 'left' | 'right' | null — set when ball hits net
+  lastBounceSide: null, // 'left' | 'right' | null — which half ball last bounced on
+  bounceCount: 0,       // consecutive bounces on lastBounceSide
+};
+
+function makePaddle(side) {
+  return {
+    x: side === 'left' ? P1_X : P2_X,
+    y: TABLE_SURF - 60,
+    vy: 0,
+    spinMode: 'flat',
+    score: 0,
+    side,
+    keys: side === 'left'
+      ? { up: 'w', down: 's', spin: ['1','2','3','4','5'] }
+      : { up: 'arrowup', down: 'arrowdown', spin: ['6','7','8','9','0'] },
+  };
+}
+
+let p1 = makePaddle('left');
+let p2 = makePaddle('right');
+let server = p1;           // who serves next
+
+let pointTimer   = 0;
+let blinkTimer   = 0;
+let winnerText   = '';
+let lastScorer   = null;
+
+// Keyboard
+const keys = {};
+window.addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  keys[k] = true;
+  // Prevent default for game keys (arrow keys scroll the page otherwise)
+  if (['arrowup','arrowdown','arrowleft','arrowright',' '].includes(k)) e.preventDefault();
+
+  // Spin mode select P1
+  const spinModes = ['flat','topspin','backspin','side-left','side-right'];
+  if (k === '1') p1.spinMode = 'flat';
+  if (k === '2') p1.spinMode = 'topspin';
+  if (k === '3') p1.spinMode = 'backspin';
+  if (k === '4') p1.spinMode = 'side-left';
+  if (k === '5') p1.spinMode = 'side-right';
+  // Spin mode select P2
+  if (k === '6') p2.spinMode = 'flat';
+  if (k === '7') p2.spinMode = 'topspin';
+  if (k === '8') p2.spinMode = 'backspin';
+  if (k === '9') p2.spinMode = 'side-left';
+  if (k === '0') p2.spinMode = 'side-right';
+
+  if (k === ' ') {
+    e.preventDefault();
+    if (gameState === 'waiting') {
+      startGame();
+    } else if (gameState === 'serving') {
+      serve();
+    } else if (gameState === 'gameover') {
+      resetGame();
+    }
+  }
+}, false);
+window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; }, false);
+
+// ── Game Init ─────────────────────────────────────────────────────────────────
+function startGame() {
+  p1.score = 0; p2.score = 0;
+  server = p1;
+  resetServe();
+}
+
+function resetGame() {
+  p1 = makePaddle('left');
+  p2 = makePaddle('right');
+  server = p1;
+  gameState = 'waiting';
+}
+
+function resetServe() {
+  ball.inPlay = false;
+  ball.spin.z = 0;
+  ball.spin.y = 0;
+  ball.angle  = 0;
+  ball.angleY = 0;
+  ball.vx = 0; ball.vy = 0; ball.vz = 0;
+  ball.netFaultFrom = null;
+  ball.lastBounceSide = null;
+  ball.bounceCount = 0;
+  // position ball at server's paddle
+  holdBallAtPaddle();
+  gameState = 'serving';
+}
+
+function holdBallAtPaddle() {
+  const paddle = server;
+  if (paddle.side === 'left') {
+    ball.x = 60;
+  } else {
+    ball.x = TABLE_W - 60;
+  }
+  // paddle.y is screen Y of paddle center; physics y = TABLE_SURF - paddle.y
+  const paddlePhysY = TABLE_SURF - paddle.y;
+  ball.y = paddlePhysY + PADDLE_H / 2 + BALL_R + 4;
+  ball.z = 0;
+}
+
+function serve() {
+  ball.inPlay = true;
+  const dir = server.side === 'left' ? 1 : -1;
+  ball.vx = dir * 9 * TIME_SCALE;
+  ball.vy = 6 * TIME_SCALE;
+  ball.vz = 0;
+  // Apply serve spin
+  applySpinToHit(server, 0);
+  gameState = 'rally';
+}
+
+function applySpinToHit(paddle, paddleVy) {
+  const strength = BASE_SPIN * (1 + Math.abs(paddleVy) * 0.3);
+  switch (paddle.spinMode) {
+    case 'topspin':    ball.spin.z =  strength; break;
+    case 'backspin':   ball.spin.z = -strength; break;
+    case 'side-left':  ball.spin.y =  strength; break;
+    case 'side-right': ball.spin.y = -strength; break;
+    default:           ball.spin.z = 0; ball.spin.y = 0; break;
+  }
+}
+
+// ── Physics Update ────────────────────────────────────────────────────────────
+function updatePhysics() {
+  if (!ball.inPlay) return;
+
+  // 1. Gravity
+  ball.vy -= G;
+
+  // 2. Magnus force
+  ball.vy += -MAGNUS_C * ball.spin.z * ball.vx;
+  ball.vz +=  MAGNUS_C * ball.spin.y * ball.vx;
+
+  // 3. Air drag
+  const speed = Math.hypot(ball.vx, ball.vy, ball.vz);
+  if (speed > 0) {
+    const dragFactor = 1 - DRAG_C * speed;
+    ball.vx *= dragFactor;
+    ball.vy *= dragFactor;
+    ball.vz *= dragFactor;
+  }
+
+  // 4. Integrate
+  ball.x += ball.vx;
+  ball.y += ball.vy;
+  ball.z += ball.vz;
+
+  // 5. Spin decay
+  ball.spin.z *= SPIN_DECAY_AIR;
+  ball.spin.y *= SPIN_DECAY_AIR;
+
+  // 6. Visual seam rotation
+  ball.angle  += ball.spin.z * 0.001;
+  ball.angleY += ball.spin.y * 0.001;
+
+  // ── Collisions ──
+
+  // Table bounce
+  if (ball.y <= ball.radius && ball.vy < 0) {
+    // Net fault: ball bounced back onto the hitter's half after hitting the net
+    if (ball.netFaultFrom !== null) {
+      const netX = TABLE_W / 2;
+      const landedLeft = ball.x < netX;
+      if ((ball.netFaultFrom === 'left') === landedLeft) {
+        const faultSide = ball.netFaultFrom;
+        ball.netFaultFrom = null;
+        awardPoint(faultSide === 'left' ? p2 : p1);
+        return;
+      }
+      ball.netFaultFrom = null; // ball cleared net after bouncing off it — no fault
+    }
+    // Double-bounce check: two bounces on same half = point for opponent
+    const netX = TABLE_W / 2;
+    const bounceSide = ball.x < netX ? 'left' : 'right';
+    if (bounceSide === ball.lastBounceSide) {
+      ball.bounceCount++;
+      if (ball.bounceCount >= 2) {
+        ball.lastBounceSide = null;
+        ball.bounceCount = 0;
+        awardPoint(bounceSide === 'left' ? p2 : p1);
+        return;
+      }
+    } else {
+      ball.lastBounceSide = bounceSide;
+      ball.bounceCount = 1;
+    }
+    ball.vy = -TABLE_COR * ball.vy;
+    ball.vx += TABLE_FRICTION * ball.spin.z * ball.radius;
+    ball.vz += TABLE_FRICTION * ball.spin.y * ball.radius;
+    ball.spin.z *= SPIN_DECAY_TABLE;
+    ball.spin.y *= SPIN_DECAY_TABLE;
+    ball.y = ball.radius; // prevent tunneling
+  }
+
+  // Net collision: net is at x = TABLE_W/2, spans y=0..NET_H_PX
+  const netX = TABLE_W / 2;
+  if (Math.abs(ball.x - netX) < BALL_R + NET_W / 2 && ball.y < NET_H_PX + BALL_R) {
+    // Only reverse if approaching net
+    if ((ball.x < netX && ball.vx > 0) || (ball.x > netX && ball.vx < 0)) {
+      ball.netFaultFrom = ball.x < netX ? 'left' : 'right'; // record who hit it into the net
+      ball.vx = -NET_COR * ball.vx;
+      ball.x = ball.x < netX ? netX - BALL_R - NET_W / 2 : netX + BALL_R + NET_W / 2;
+    }
+  }
+
+  // Paddle collisions
+  checkPaddleHit(p1);
+  checkPaddleHit(p2);
+
+  // Out of bounds checks
+  if (ball.x < -BALL_R) {
+    // Ball passed left edge — p2 scores
+    awardPoint(p2);
+  } else if (ball.x > TABLE_W + BALL_R) {
+    // Ball passed right edge — p1 scores
+    awardPoint(p1);
+  } else if (ball.y < -80) {
+    // Ball fell under table (miss)
+    const scorer = ball.x < TABLE_W / 2 ? p2 : p1;
+    awardPoint(scorer);
+  }
+}
+
+function checkPaddleHit(paddle) {
+  // Paddle is a vertical bar. Center at (paddle.x, paddle.y) in screen coords.
+  // Convert to physics coords for ball:
+  // paddle physics x: p1 => (P1_X - TABLE_LEFT), p2 => (P2_X - TABLE_LEFT)
+  const px = paddle.x - TABLE_LEFT;
+  const py = TABLE_SURF - paddle.y;  // center of paddle in physics y
+
+  const halfW = PADDLE_W / 2;
+  const halfH = PADDLE_H / 2;
+
+  // Closest point on paddle rect to ball center
+  const closestX = Math.max(px - halfW, Math.min(ball.x, px + halfW));
+  const closestY = Math.max(py - halfH, Math.min(ball.y, py + halfH));
+  const dx = ball.x - closestX;
+  const dy = ball.y - closestY;
+  const dist = Math.hypot(dx, dy);
+
+  if (dist < ball.radius) {
+    // Determine direction (approaching from left or right)
+    const fromLeft = ball.x < px;
+    const approaching = fromLeft ? (ball.vx > 0) : (ball.vx < 0);
+    if (!approaching) return;
+
+    const dir = fromLeft ? -1 : 1;
+    ball.vx = dir * PADDLE_COR * Math.abs(ball.vx) + dir * 3; // guaranteed bounce + boost
+    // Push out of paddle
+    ball.x = px + dir * (halfW + ball.radius + 1);
+
+    // Reset bounce tracking — ball has been returned
+    ball.lastBounceSide = null;
+    ball.bounceCount = 0;
+    // Apply spin from paddle's current spin mode
+    applySpinToHit(paddle, paddle.vy);
+  }
+}
+
+function awardPoint(scorer) {
+  scorer.score++;
+  lastScorer = scorer;
+  ball.inPlay = false;
+  pointTimer = 60; // frames to show +1
+  gameState = 'point';
+
+  // Check win condition (first to 11, must lead by 2)
+  const maxScore = Math.max(p1.score, p2.score);
+  if (maxScore >= 11 && Math.abs(p1.score - p2.score) >= 2) {
+    winnerText = scorer.side === 'left' ? 'P1 WINS!' : 'P2 WINS!';
+    gameState = 'gameover';
+  } else {
+    // Next serve goes to loser (simplified: alternate serve)
+    server = scorer === p1 ? p2 : p1;
+  }
+}
+
+// ── Trajectory Ghost ──────────────────────────────────────────────────────────
+function simulateTrajectory(steps = 60, interval = 2) {
+  if (!ball.inPlay) return [];
+  const pts = [];
+  let bx = ball.x, by = ball.y, bz = ball.z;
+  let vx = ball.vx, vy = ball.vy, vz = ball.vz;
+  let sz = ball.spin.z, sy = ball.spin.y;
+
+  for (let i = 0; i < steps; i++) {
+    vy -= G;
+    vy += -MAGNUS_C * sz * vx;
+    vz +=  MAGNUS_C * sy * vx;
+    const spd = Math.hypot(vx, vy, vz);
+    if (spd > 0) {
+      const d = 1 - DRAG_C * spd;
+      vx *= d; vy *= d; vz *= d;
+    }
+    bx += vx; by += vy; bz += vz;
+    sz *= SPIN_DECAY_AIR; sy *= SPIN_DECAY_AIR;
+
+    if (by <= ball.radius) {
+      vy = -TABLE_COR * vy;
+      vx += TABLE_FRICTION * sz * ball.radius;
+      vz += TABLE_FRICTION * sy * ball.radius;
+      sz *= SPIN_DECAY_TABLE; sy *= SPIN_DECAY_TABLE;
+      by = ball.radius;
+    }
+
+    if (i % interval === 0) {
+      pts.push({ x: bx, y: by, z: bz, i });
+    }
+    if (bx < -BALL_R || bx > TABLE_W + BALL_R) break;
+  }
+  return pts;
+}
+
+// ── Rendering ─────────────────────────────────────────────────────────────────
+function screenX(physX) { return TABLE_LEFT + physX; }
+function screenY(physY) { return TABLE_SURF - physY; }
+
+function drawBackground() {
+  ctx.fillStyle = '#0f0f1a';
+  ctx.fillRect(0, 0, W, H);
+  // Subtle floor gradient
+  const floor = ctx.createLinearGradient(0, TABLE_SURF + TABLE_H_PX, 0, H);
+  floor.addColorStop(0, '#111122');
+  floor.addColorStop(1, '#0a0a14');
+  ctx.fillStyle = floor;
+  ctx.fillRect(0, TABLE_SURF + TABLE_H_PX, W, H - TABLE_SURF - TABLE_H_PX);
+}
+
+function drawTable() {
+  // Table top face
+  ctx.fillStyle = '#1a7a3a';
+  ctx.fillRect(TABLE_LEFT, TABLE_SURF - 1, TABLE_W, 2);
+
+  // Full table surface
+  ctx.fillStyle = '#1e8a42';
+  ctx.fillRect(TABLE_LEFT, TABLE_SURF - 4, TABLE_W, 4);
+
+  // Top face (slightly lighter)
+  ctx.fillStyle = '#228b44';
+  ctx.fillRect(TABLE_LEFT, TABLE_SURF - 6, TABLE_W, 6);
+
+  // Table slab (3D side)
+  const grad = ctx.createLinearGradient(0, TABLE_SURF, 0, TABLE_SURF + TABLE_H_PX);
+  grad.addColorStop(0, '#145c2a');
+  grad.addColorStop(1, '#0a3a1a');
+  ctx.fillStyle = grad;
+  ctx.fillRect(TABLE_LEFT, TABLE_SURF, TABLE_W, TABLE_H_PX);
+
+  // Table border lines (white edges on surface)
+  ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+  ctx.lineWidth = 2;
+  // Left edge
+  ctx.beginPath();
+  ctx.moveTo(TABLE_LEFT, TABLE_SURF - 6);
+  ctx.lineTo(TABLE_LEFT, TABLE_SURF);
+  ctx.stroke();
+  // Right edge
+  ctx.beginPath();
+  ctx.moveTo(TABLE_RIGHT, TABLE_SURF - 6);
+  ctx.lineTo(TABLE_RIGHT, TABLE_SURF);
+  ctx.stroke();
+  // Top surface border
+  ctx.beginPath();
+  ctx.moveTo(TABLE_LEFT, TABLE_SURF - 6);
+  ctx.lineTo(TABLE_RIGHT, TABLE_SURF - 6);
+  ctx.stroke();
+
+  // Center line (white)
+  ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([6, 6]);
+  ctx.beginPath();
+  ctx.moveTo(NET_X, TABLE_SURF - 6);
+  ctx.lineTo(NET_X, TABLE_SURF);
+  ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+function drawNet() {
+  // Net screen X = TABLE_LEFT + TABLE_W/2 = NET_X
+  const sx = NET_X;
+  const netTop = TABLE_SURF - NET_H_PX;
+
+  // Net shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  ctx.fillRect(sx - NET_W / 2 + 2, netTop + 2, NET_W, NET_H_PX);
+
+  // Net body
+  const netGrad = ctx.createLinearGradient(sx - NET_W / 2, 0, sx + NET_W / 2, 0);
+  netGrad.addColorStop(0, '#aaa');
+  netGrad.addColorStop(0.5, '#fff');
+  netGrad.addColorStop(1, '#aaa');
+  ctx.fillStyle = netGrad;
+  ctx.fillRect(sx - NET_W / 2, netTop, NET_W, NET_H_PX);
+
+  // Net mesh lines
+  ctx.strokeStyle = 'rgba(180,180,180,0.4)';
+  ctx.lineWidth = 0.5;
+  for (let yy = netTop + 4; yy < TABLE_SURF; yy += 6) {
+    ctx.beginPath();
+    ctx.moveTo(sx - NET_W / 2, yy);
+    ctx.lineTo(sx + NET_W / 2, yy);
+    ctx.stroke();
+  }
+
+  // Net post
+  ctx.fillStyle = '#ccc';
+  ctx.fillRect(sx - 1, TABLE_SURF, 2, TABLE_H_PX);
+}
+
+function drawTrajectory() {
+  const pts = simulateTrajectory(80, 3);
+  if (pts.length < 2) return;
+  for (let i = 0; i < pts.length; i++) {
+    const t = 1 - i / pts.length;
+    const sx = screenX(pts[i].x) + pts[i].z * 0.15;
+    const sy = screenY(pts[i].y);
+    ctx.beginPath();
+    ctx.arc(sx, sy, 3 * t + 1, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(255,255,150,${t * 0.35})`;
+    ctx.fill();
+  }
+}
+
+function drawBallShadow() {
+  if (!ball.inPlay) return;
+  const sx = screenX(ball.x) + ball.z * 0.15;
+  const shadowW = ball.radius * 1.8 / (1 + ball.y / 40);
+  const shadowH = shadowW * 0.3;
+  const alpha = Math.min(0.6, 0.6 / (1 + ball.y / 60));
+  if (ball.y < 0) return;
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = 'rgba(0,0,0,0.8)';
+  ctx.beginPath();
+  ctx.ellipse(sx, TABLE_SURF - 3, shadowW, shadowH, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawBall() {
+  const sx = screenX(ball.x) + ball.z * 0.15;
+  const sy = screenY(ball.y);
+  const r  = ball.radius;
+
+  if (!ball.inPlay && gameState !== 'serving') return;
+
+  // White ball with subtle highlight
+  const grad = ctx.createRadialGradient(sx - r * 0.35, sy - r * 0.35, r * 0.05, sx, sy, r);
+  grad.addColorStop(0, '#ffffff');
+  grad.addColorStop(0.6, '#f0f0f0');
+  grad.addColorStop(1, '#d8d8d8');
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(sx, sy, r, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Thin outline
+  ctx.strokeStyle = 'rgba(0,0,0,0.12)';
+  ctx.lineWidth = 0.8;
+  ctx.stroke();
+
+  // Spin marker: comet trail whose direction shows spin rotation
+  const spinMag = Math.abs(ball.spin.z) + Math.abs(ball.spin.y);
+  const dominantZ = Math.abs(ball.spin.z) >= Math.abs(ball.spin.y);
+  const dominantSpin = dominantZ ? ball.spin.z : ball.spin.y;
+
+  // Color by spin type
+  let tc = [80, 80, 80]; // flat
+  if (spinMag > 0.5) {
+    if (dominantZ) {
+      tc = dominantSpin > 0 ? [255, 107, 157] : [77, 212, 240]; // pink=top, cyan=back
+    } else {
+      tc = dominantSpin > 0 ? [163, 230, 53] : [249, 115, 22];  // lime=sideL, orange=sideR
+    }
+  }
+
+  const orbitR   = r * 0.64;
+  const baseAngle = dominantZ ? ball.angle : ball.angleY;
+  const spinDir  = Math.sign(dominantSpin) || 1;
+  const intensity = Math.min(1, spinMag / 10);
+
+  // Trail: draw tail-to-head so head renders on top
+  const TRAIL = 5;
+  for (let i = TRAIL; i >= 0; i--) {
+    const ang = baseAngle - spinDir * i * 0.44;
+    // spin.z orbits in the vertical plane; spin.y orbits in a flattened horizontal plane
+    const tx = sx + Math.cos(ang) * orbitR;
+    const ty = dominantZ
+      ? sy + Math.sin(ang) * orbitR
+      : sy + Math.sin(ang) * orbitR * 0.22;
+    const frac = 1 - i / TRAIL;                        // 0 = tail, 1 = head
+    const alpha = i === 0 ? Math.max(0.5, intensity) : frac * intensity * 0.85;
+    const size  = i === 0 ? 2.8 : 1.6 * frac + 0.3;
+    ctx.beginPath();
+    ctx.arc(tx, ty, size, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(${tc[0]},${tc[1]},${tc[2]},${alpha})`;
+    ctx.fill();
+  }
+}
+
+function drawPaddle(paddle) {
+  const sx = paddle.x;
+  const sy = paddle.y;
+  const cfg = SPIN_CONFIG[paddle.spinMode];
+  const tiltAngle = paddle.spinMode === 'topspin' ? 0.09
+                  : paddle.spinMode === 'backspin' ? -0.09
+                  : 0;
+
+  ctx.save();
+  ctx.translate(sx, sy);
+  ctx.rotate(tiltAngle);
+
+  // Paddle body
+  const pw = PADDLE_W + 6;
+  const ph = PADDLE_H;
+  ctx.fillStyle = '#2a2a3a';
+  ctx.beginPath();
+  roundedRect(ctx, -pw / 2 - 1, -ph / 2 - 1, pw + 2, ph + 2, 5);
+  ctx.fill();
+
+  ctx.fillStyle = '#cc3333';
+  ctx.beginPath();
+  roundedRect(ctx, -pw / 2, -ph / 2, pw, ph, 4);
+  ctx.fill();
+
+  // Rubber face highlight
+  ctx.fillStyle = 'rgba(255,100,80,0.3)';
+  ctx.beginPath();
+  roundedRect(ctx, -pw / 2 + 1, -ph / 2 + 1, pw / 2, ph - 2, 3);
+  ctx.fill();
+
+  // Spin mode edge color
+  ctx.strokeStyle = cfg.color;
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  roundedRect(ctx, -pw / 2, -ph / 2, pw, ph, 4);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+function roundedRect(ctx, x, y, w, h, r) {
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.arcTo(x + w, y, x + w, y + r, r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+  ctx.lineTo(x + r, y + h);
+  ctx.arcTo(x, y + h, x, y + h - r, r);
+  ctx.lineTo(x, y + r);
+  ctx.arcTo(x, y, x + r, y, r);
+  ctx.closePath();
+}
+
+function drawSpinBadge(paddle) {
+  const cfg = SPIN_CONFIG[paddle.spinMode];
+  const bx = paddle.side === 'left' ? paddle.x + 22 : paddle.x - 22;
+  const by = paddle.y - PADDLE_H / 2 - 10;
+
+  ctx.save();
+  ctx.font = 'bold 10px Courier New';
+  const tw = ctx.measureText(cfg.label).width;
+  const bw = tw + 12;
+  const bh = 16;
+
+  ctx.fillStyle = cfg.color + '33';
+  ctx.strokeStyle = cfg.color;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  const bxAligned = paddle.side === 'left' ? bx : bx - bw;
+  roundedRect(ctx, bxAligned, by - bh / 2, bw, bh, 4);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = cfg.color;
+  ctx.textAlign = paddle.side === 'left' ? 'left' : 'right';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(cfg.label, bxAligned + 6, by);
+  ctx.restore();
+}
+
+function drawHUD() {
+  // Score
+  ctx.save();
+  ctx.font = 'bold 28px Courier New';
+  ctx.fillStyle = '#fff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillText(`P1: ${p1.score}  —  P2: ${p2.score}`, W / 2, 14);
+  ctx.restore();
+
+  // Spin badges
+  drawSpinBadge(p1);
+  drawSpinBadge(p2);
+
+  // Serve indicator
+  if (gameState === 'serving') {
+    blinkTimer++;
+    if (Math.floor(blinkTimer / 20) % 2 === 0) {
+      ctx.save();
+      ctx.font = 'bold 13px Courier New';
+      ctx.fillStyle = '#ffe066';
+      ctx.textAlign = server.side === 'left' ? 'left' : 'right';
+      ctx.textBaseline = 'middle';
+      const bx = server.side === 'left' ? TABLE_LEFT + 5 : TABLE_RIGHT - 5;
+      ctx.fillText('SPACE to serve', bx, TABLE_SURF - 80);
+      ctx.restore();
+    }
+  }
+
+  // Point flash
+  if (gameState === 'point' && pointTimer > 0) {
+    ctx.save();
+    const alpha = Math.min(1, pointTimer / 30);
+    ctx.globalAlpha = alpha;
+    ctx.font = 'bold 48px Courier New';
+    ctx.fillStyle = lastScorer === p1 ? '#a3e635' : '#ff6b9d';
+    ctx.textAlign = lastScorer.side === 'left' ? 'left' : 'right';
+    ctx.textBaseline = 'middle';
+    const px2 = lastScorer.side === 'left' ? TABLE_LEFT + 20 : TABLE_RIGHT - 20;
+    ctx.fillText('+1', px2, TABLE_SURF - 60);
+    ctx.restore();
+  }
+}
+
+function drawWaiting() {
+  ctx.save();
+  ctx.fillStyle = 'rgba(15,15,26,0.85)';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 42px Courier New';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('TABLE TENNIS', W / 2, H / 2 - 70);
+
+  ctx.font = '16px Courier New';
+  ctx.fillStyle = '#aaa';
+  ctx.fillText('First to 11 points wins (lead by 2)', W / 2, H / 2 - 30);
+
+  ctx.fillStyle = '#ffe066';
+  ctx.font = 'bold 18px Courier New';
+  ctx.fillText('PRESS SPACE TO START', W / 2, H / 2 + 20);
+
+  ctx.font = '13px Courier New';
+  ctx.fillStyle = '#666';
+  ctx.fillText('P1: W/S move  |  1=flat 2=topspin 3=backspin 4=sideL 5=sideR', W / 2, H / 2 + 60);
+  ctx.fillText('P2: ↑/↓ move  |  6=flat 7=topspin 8=backspin 9=sideL 0=sideR', W / 2, H / 2 + 80);
+  ctx.restore();
+}
+
+function drawGameOver() {
+  ctx.save();
+  ctx.fillStyle = 'rgba(15,15,26,0.9)';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.fillStyle = '#ffe066';
+  ctx.font = 'bold 54px Courier New';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(winnerText, W / 2, H / 2 - 40);
+
+  ctx.fillStyle = '#fff';
+  ctx.font = '22px Courier New';
+  ctx.fillText(`${p1.score}  —  ${p2.score}`, W / 2, H / 2 + 20);
+
+  ctx.fillStyle = '#aaa';
+  ctx.font = '16px Courier New';
+  ctx.fillText('PRESS SPACE to play again', W / 2, H / 2 + 65);
+  ctx.restore();
+}
+
+// ── Input / Paddle Movement ────────────────────────────────────────────────────
+function updatePaddles() {
+  // P1
+  if (keys['w']) { p1.vy = -PADDLE_SPEED; p1.y += p1.vy; }
+  else if (keys['s']) { p1.vy = PADDLE_SPEED; p1.y += p1.vy; }
+  else p1.vy = 0;
+
+  // P2
+  if (keys['arrowup'])   { p2.vy = -PADDLE_SPEED; p2.y += p2.vy; }
+  else if (keys['arrowdown']) { p2.vy = PADDLE_SPEED; p2.y += p2.vy; }
+  else p2.vy = 0;
+
+  // Clamp paddles (screen Y: smaller = higher on screen)
+  const maxY = TABLE_SURF - 10;             // bottom limit (at table)
+  const minY = 60;                          // top limit
+  p1.y = Math.max(minY, Math.min(maxY, p1.y));
+  p2.y = Math.max(minY, Math.min(maxY, p2.y));
+
+  // Update serving ball position
+  if (gameState === 'serving') {
+    holdBallAtPaddle();
+  }
+}
+
+// ── Main Loop ─────────────────────────────────────────────────────────────────
+function loop() {
+  requestAnimationFrame(loop);
+
+  // Update
+  updatePaddles();
+
+  if (gameState === 'rally') {
+    updatePhysics();
+  } else if (gameState === 'point') {
+    pointTimer--;
+    if (pointTimer <= 0) {
+      resetServe();
+    }
+  }
+
+  // Draw
+  drawBackground();
+  drawTable();
+  drawNet();
+
+  if (ball.inPlay || gameState === 'serving') {
+    drawTrajectory();
+    drawBallShadow();
+  }
+
+  drawPaddle(p1);
+  drawPaddle(p2);
+
+  if (ball.inPlay || gameState === 'serving') {
+    drawBall();
+  }
+
+  drawHUD();
+
+  if (gameState === 'waiting') drawWaiting();
+  if (gameState === 'gameover') drawGameOver();
+}
+
+// ── Start ─────────────────────────────────────────────────────────────────────
+p1.y = TABLE_SURF - 60;
+p2.y = TABLE_SURF - 60;
+loop();
+</script>
+</body>
+</html>
