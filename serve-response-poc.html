@@ -101,6 +101,7 @@ function lerpKF(kfs, t) {
 const SPIN_CFG = {
   topspin:  { color: '#ff6b9d', label: 'TOPSPIN'  },
   backspin: { color: '#4dd4f0', label: 'BACKSPIN' },
+  flat:     { color: '#e8c040', label: 'FLAT'     },
 };
 
 // ── Serve types ───────────────────────────────────────────────────────────────
@@ -108,12 +109,20 @@ const SERVES = {
   topspin: {
     label: 'Topspin', color: '#ff6b9d',
     desc:  'Ball dips fast & speeds forward on bounce',
+    contactY: 56,
     spin:  22, launchVy: 4.8, launchVz: -3.5, launchVx: 0,
   },
   backspin: {
     label: 'Backspin', color: '#4dd4f0',
-    desc:  'Ball floats high & slows/kicks back on bounce',
-    spin: -20, launchVy: 4.2, launchVz: -4.5, launchVx: 0,
+    desc:  'Ball floats low & slows/kicks back on bounce',
+    contactY: 30,   // lower contact → ball drops faster, bounces server-side first
+    spin: -20, launchVy: 2.5, launchVz: -5.0, launchVx: 0,
+  },
+  flat: {
+    label: 'Flat', color: '#e8c040',
+    desc:  'No spin — fast, direct, low bounce',
+    contactY: 44,
+    spin:   0, launchVy: 3.8, launchVz: -4.2, launchVx: 0,
   },
 };
 
@@ -132,7 +141,22 @@ const OPP_KFS = {
     { t: 0.42, dx:   8, dy:  22, angle:  0.18, palmRot:  0.52 },  // contact — CHOPS DOWN fast
     { t: 0.75, dx:  -8, dy:  68, angle:  0.03, palmRot:  0.10 },  // follow-through — very LOW
   ],
+  flat: [
+    { t: 0.00, dx:  12, dy:  36, angle:  0.10, palmRot:  0.00 },  // ready — neutral height
+    { t: 0.42, dx:   7, dy:   8, angle:  0.82, palmRot:  0.18 },  // contact — blade vertical, punch through
+    { t: 0.75, dx:  -5, dy: -28, angle:  0.68, palmRot:  0.08 },  // follow-through — straight forward
+  ],
 };
+
+// Maps a response type to the spin it puts on the ball (determines next serve)
+// loop/flick → topspin; push/chop → backspin; drive → flat; block/trim → any of three.
+function spinFromResponse(id) {
+  if (id === 'loop' || id === 'flick') return 'topspin';
+  if (id === 'push' || id === 'chop')  return 'backspin';
+  if (id === 'drive')                  return 'flat';
+  const spins = ['topspin', 'backspin', 'flat'];
+  return spins[Math.floor(Math.random() * spins.length)];
+}
 
 // ── Responses ─────────────────────────────────────────────────────────────────
 const RESPONSES = [
@@ -198,6 +222,35 @@ const PLAYER_KFS = {
   ],
 };
 
+// ── Player skill profile ──────────────────────────────────────────────────────
+// Each shot has independent skill levels for forehand and backhand
+const DEFAULT_SKILLS = {
+  loop:  { forehand: 'avg',  backhand: 'bad'  },
+  push:  { forehand: 'avg',  backhand: 'good' },
+  drive: { forehand: 'avg',  backhand: 'bad'  },
+  block: { forehand: 'avg',  backhand: 'avg'  },
+  flick: { forehand: 'bad',  backhand: 'bad'  },
+  chop:  { forehand: 'avg',  backhand: 'avg'  },
+  trim:  { forehand: 'bad',  backhand: 'bad'  },
+};
+function loadSkills() {
+  try {
+    const stored = JSON.parse(localStorage.getItem('tt_skills'));
+    if (!stored) return Object.assign({}, DEFAULT_SKILLS);
+    // Migrate old format that had {hand, skill} instead of {forehand, backhand}
+    const isOld = Object.values(stored).some(v => v && ('hand' in v || 'skill' in v));
+    if (isOld) { localStorage.removeItem('tt_skills'); return Object.assign({}, DEFAULT_SKILLS); }
+    return Object.assign({}, DEFAULT_SKILLS, stored);
+  } catch(e) { return Object.assign({}, DEFAULT_SKILLS); }
+}
+function saveSkills() { localStorage.setItem('tt_skills', JSON.stringify(playerSkills)); }
+let playerSkills = loadSkills();
+
+// Response timeout (optional — player must pick within N frames or get a random pick)
+const RESPONSE_TIMEOUT_FRAMES = 240;  // 4 seconds at 60 fps
+let responseTimeoutEnabled = JSON.parse(localStorage.getItem('tt_timeout') || 'false');
+function saveTimeout() { localStorage.setItem('tt_timeout', JSON.stringify(responseTimeoutEnabled)); }
+
 // ── Outcome table ─────────────────────────────────────────────────────────────
 const OUTCOMES = {
   topspin: {
@@ -218,6 +271,15 @@ const OUTCOMES = {
     chop:  { rating:'excellent', result:'win',   tip:'Chopping backspin is natural — open blade cuts under the ball and returns deep backspin.' },
     trim:  { rating:'good',      result:'win',   tip:'Trimming backspin adds sidespin variety. Keep the blade open and guide sideways-forward.' },
   },
+  flat: {
+    loop:  { rating:'good',      result:'win',   tip:'Looping a flat ball is comfortable — brush upward freely with no incoming spin to fight.' },
+    push:  { rating:'risky',     result:'risky', tip:'Pushing flat tends to float long. Keep the blade very open and guide gently.' },
+    drive: { rating:'excellent', result:'win',   tip:'Flat drive against flat is natural — meet the ball cleanly and punch through.' },
+    block: { rating:'good',      result:'win',   tip:'Blocking flat is reliable — blade near-vertical, absorb the pace and redirect.' },
+    flick: { rating:'good',      result:'win',   tip:'Flat ball is easy to flick — snap the wrist through without fighting any spin.' },
+    chop:  { rating:'risky',     result:'risky', tip:'Chopping flat creates backspin from nothing — fine technique needed or it drifts long.' },
+    trim:  { rating:'risky',     result:'risky', tip:'Trimming a flat ball can work but the blade angle is easy to mis-judge.' },
+  },
 };
 
 const RATING_COLOR = { excellent:'#22c55e', good:'#60a5fa', risky:'#f97316', wrong:'#ef4444' };
@@ -233,6 +295,7 @@ const st = {
   serveStartX: 70,    // opponent toss origin x (physics) — randomised each serve
   serveLandX: 0,      // target x where ball should land on player side
   serveVx: 0,         // lateral velocity computed per serve (set in SELECT_SPIN)
+  serveContactY: 56,  // ball height at contact — per spin type
   oppArmShift: {dx:0, dy:0},   // per-serve shift so opp contact kf aligns with ball
   responseContactBase: null,   // snapshot ball screen pos at RESPONSE_ANIM start
   bounceFar: 0, bounceNear: 0,
@@ -245,6 +308,9 @@ const st = {
   netHit: false,      // flag to enforce 'net' result visually
   score: 0,           // consecutive wins in current rally
   outcomeTimer: 0,    // frames elapsed in OUTCOME phase
+  oppResponse: null,  // opponent's chosen (correct) response after a player win
+  responseTimer: 0,   // frames elapsed in SELECT_RESPONSE (used for optional timeout)
+  chosenHand: null,   // 'forehand'|'backhand' — set when player clicks a hand row
 };
 
 const trail = [];
@@ -253,6 +319,7 @@ const oppArmTrail = [];
 const UI = {};   // { key: {x,y,w,h} } populated each frame
 let mouseX = 0, mouseY = 0;
 let spinArrowT = 0;
+let showSettings = false;
 
 // Precomputed opponent shoulder screen position
 let SH = null;
@@ -261,19 +328,76 @@ function initShoulder() {
   SH = project(80, 82, TBL_D);
 }
 
+// Opponent picks a response weighted by quality — mostly safe but will attempt risky shots
+function pickOpponentResponse(playerResponseId) {
+  const spinType = spinFromResponse(playerResponseId);
+  // Weights: excellent=5, good=3, risky=2, wrong=0
+  const W = { excellent: 5, good: 3, risky: 2, wrong: 0 };
+  const pool = [];
+  for (const r of RESPONSES) {
+    const w = W[OUTCOMES[spinType][r.id].rating] || 0;
+    for (let i = 0; i < w; i++) pool.push(r);
+  }
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
+// ── Backhand / Forehand helpers ───────────────────────────────────────────────
+// 'forehand' = ball landed right (x>25), 'backhand' = left (x<-25), 'mid' = centre
+function landSide() {
+  if (st.serveLandX > 25)  return 'forehand';
+  if (st.serveLandX < -25) return 'backhand';
+  return 'mid';
+}
+
+// Returns the skill level for a given hand (or the active/better hand if unspecified)
+function activeSkillFor(responseId, handOverride) {
+  const sk = playerSkills[responseId];
+  if (!sk) return 'good';
+  const hand = handOverride || st.chosenHand || landSide();
+  if (hand === 'forehand') return sk.forehand;
+  if (hand === 'backhand') return sk.backhand;
+  // Centre with no chosen hand: use the better of the two
+  const rank = { bad: 0, avg: 1, good: 2 };
+  return rank[sk.forehand] >= rank[sk.backhand] ? sk.forehand : sk.backhand;
+}
+
+// Degrade a base outcome by the active hand's skill level
+function applySkillToOutcome(od, responseId, handOverride) {
+  const skill = activeSkillFor(responseId, handOverride);
+  let penalty = 0;
+  if (skill === 'avg') penalty = 1;
+  if (skill === 'bad') penalty = 2;
+  if (penalty === 0) return od;
+  if (od.result === 'net' || od.result === 'out' || od.result === 'popup') return od;
+  const out = Object.assign({}, od);
+  if (od.result === 'win') {
+    if (penalty === 1) {
+      if (od.rating === 'excellent') out.rating = 'good';
+    } else {
+      out.rating = 'risky'; out.result = 'risky';
+    }
+  } else if (od.result === 'risky' && penalty >= 2) {
+    out.rating = 'wrong'; out.result = 'net';
+    out.tip = 'Poor technique — into the net.';
+  }
+  return out;
+}
+
 // ── State transitions ─────────────────────────────────────────────────────────
 function go(phase) {
   st.phase = phase;
   switch (phase) {
     case 'SELECT_SPIN':
-      st.spin = Math.random() < 0.5 ? 'topspin' : 'backspin';
+      st.spin = st.oppResponse ? spinFromResponse(st.oppResponse.id) : ['topspin', 'backspin', 'flat'][Math.floor(Math.random() * 3)];
+      st.oppResponse = null;
       st.outcome = null; st.response = null;
       st.masterT = 0; trail.length = 0;
       // Randomise lateral serve: opponent toss origin and landing zone on player side
-      st.serveStartX = (Math.random() * 2 - 1) * 90;   // -90..+90
-      st.serveLandX  = (Math.random() * 2 - 1) * 110;  // -110..+110 (within table ±152)
+      st.serveStartX  = (Math.random() * 2 - 1) * 90;   // -90..+90
+      st.serveLandX   = (Math.random() * 2 - 1) * 110;  // -110..+110 (within table ±152)
       // vx so ball drifts from serveStartX to serveLandX over ~120 physics frames
-      st.serveVx = (st.serveLandX - st.serveStartX) / 120;
+      st.serveVx      = (st.serveLandX - st.serveStartX) / 120;
+      st.serveContactY = SERVES[st.spin].contactY;
       ballReset();
       go('SERVE_ANIM');
       return;
@@ -289,7 +413,7 @@ function go(phase) {
       st.ball.spin = SERVES[st.spin].spin;
       // Shift entire arm trajectory so contact keyframe (t=CONTACT_MT) lands on ball
       {
-        const ballContact = project(st.serveStartX, OPP_CONTACT_Y, OPP_TOSS_Z);
+        const ballContact = project(st.serveStartX, st.serveContactY, OPP_TOSS_Z);
         const ckf = OPP_KFS[st.spin].find(k => k.t === CONTACT_MT);
         st.oppArmShift = {
           dx: ballContact.sx - SH.sx - ckf.dx,
@@ -299,9 +423,11 @@ function go(phase) {
       break;
     case 'BALL_INCOMING':
       st.timeScale = TIME_SCALE;
+      st.chosenHand = null;
       break;
     case 'SELECT_RESPONSE':
       st.timeScale = TIME_SCALE * 0.12;
+      st.responseTimer = 0;
       break;
     case 'RESPONSE_ANIM':
       st.playerT = 0; st.contactFired = false;
@@ -314,8 +440,12 @@ function go(phase) {
     case 'OUTCOME':
       st.timeScale = TIME_SCALE;
       st.outcomeTimer = 0;
-      if (st.outcome && st.outcome.result === 'win') st.score++;
-      else st.score = 0;
+      if (st.outcome && st.outcome.result === 'win') {
+        st.score++;
+        st.oppResponse = st.response ? pickOpponentResponse(st.response.id) : null;
+      } else {
+        st.score = 0;
+      }
       break;
   }
 }
@@ -329,7 +459,7 @@ function tossPos(mt) {
   const p = clamp(mt / CONTACT_MT, 0, 1);
   return {
     x: st.serveStartX,
-    y: OPP_CONTACT_Y * p + OPP_TOSS_PEAK * 4 * p * (1 - p),
+    y: st.serveContactY * p + OPP_TOSS_PEAK * 4 * p * (1 - p),
     z: OPP_TOSS_Z,
   };
 }
@@ -374,8 +504,8 @@ function updateBall() {
       if (st.phase === 'BALL_INCOMING' && st.bounceNear === 1) {
         go('SELECT_RESPONSE');
       }
-      if (st.bounceNear >= 2 && (st.phase === 'BALL_INCOMING' || st.phase === 'SELECT_RESPONSE')) {
-        // Double bounce before player responds — fault
+      if (st.bounceNear >= 2 && st.phase === 'BALL_INCOMING') {
+        // Double bounce before player even sees the response panel — fault
         st.outcome = {rating:'wrong', result:'net', tip:'Double bounce on your side.'};
         go('OUTCOME');
       }
@@ -390,10 +520,9 @@ function updateBall() {
       const frac = (prevZ - TBL_H) / (prevZ - b.z + 1e-6);
       const yAtNet = (b.y - b.vy * ts) + frac * b.vy * ts;
       if (yAtNet < NET_H) {
-        b.vz = -b.vz * COR_NET;
-        b.vy = Math.abs(b.vy) * COR_NET;
-        b.z  = TBL_H + 2;
-        b.spin *= 0.4;
+        // Serve clips the net — treat as a let and restart
+        go('SELECT_SPIN');
+        return;
       }
     }
   }
@@ -452,42 +581,58 @@ function drawBg() {
 
 // ── Draw: Table ───────────────────────────────────────────────────────────────
 function drawTable() {
-  const nl=project(-TBL_HW,0,0), nr=project(TBL_HW,0,0);
-  const fl=project(-TBL_HW,0,TBL_D), fr=project(TBL_HW,0,TBL_D);
-  const cl=project(-TBL_HW,0,TBL_H), cr=project(TBL_HW,0,TBL_H);
+  const nl = project(-TBL_HW, 0, 0),    nr = project( TBL_HW, 0, 0);
+  const fl = project(-TBL_HW, 0, TBL_D), fr = project( TBL_HW, 0, TBL_D);
 
-  // Felt surface
-  const fg = ctx.createLinearGradient(CX,TBL_NEAR_Y, CX,TBL_FAR_Y);
-  fg.addColorStop(0,'#1e7a38'); fg.addColorStop(0.5,'#196830'); fg.addColorStop(1,'#0e3a1a');
-  ctx.fillStyle=fg;
+  // ── Surface (ITTF-blue) ────────────────────────────────────────────────────
+  const fg = ctx.createLinearGradient(CX, TBL_FAR_Y, CX, TBL_NEAR_Y);
+  fg.addColorStop(0,   '#0c2952');   // far end — darkest
+  fg.addColorStop(0.5, '#163e78');
+  fg.addColorStop(1,   '#1a4a96');   // near end — lightest (faces viewer)
+  ctx.fillStyle = fg;
   ctx.beginPath();
-  ctx.moveTo(nl.sx,nl.sy); ctx.lineTo(nr.sx,nr.sy);
-  ctx.lineTo(fr.sx,fr.sy); ctx.lineTo(fl.sx,fl.sy);
+  ctx.moveTo(nl.sx, nl.sy); ctx.lineTo(nr.sx, nr.sy);
+  ctx.lineTo(fr.sx, fr.sy); ctx.lineTo(fl.sx, fl.sy);
   ctx.closePath(); ctx.fill();
 
-  // Table lines
-  function line(p1,p2,w,c) {
-    ctx.strokeStyle=c; ctx.lineWidth=w;
-    ctx.beginPath(); ctx.moveTo(p1.sx,p1.sy); ctx.lineTo(p2.sx,p2.sy); ctx.stroke();
+  // ── White markings (perspective-scaled line width) ─────────────────────────
+  // All five regulation lines: 4 boundary + 1 lengthwise centre line (for doubles)
+  function pLine(x1, z1, x2, z2, w, alpha) {
+    const p1 = project(x1, 0, z1), p2 = project(x2, 0, z2);
+    ctx.strokeStyle = `rgba(255,255,255,${alpha})`;
+    ctx.lineWidth = Math.max(0.5, w * lerp(p1.scale, p2.scale, 0.5));
+    ctx.lineCap = 'square';
+    ctx.beginPath(); ctx.moveTo(p1.sx, p1.sy); ctx.lineTo(p2.sx, p2.sy); ctx.stroke();
   }
-  line(nl,nr, 2,'rgba(255,255,255,0.88)');  // near edge (bright — faces viewer)
-  line(fl,fr, 1,'rgba(255,255,255,0.45)');  // far edge
-  line(nl,fl, 1,'rgba(255,255,255,0.30)');  // left
-  line(nr,fr, 1,'rgba(255,255,255,0.30)');  // right
-  // Centre dashed line
-  ctx.save(); ctx.setLineDash([5,5]);
-  line(cl,cr, 1,'rgba(255,255,255,0.20)');
-  ctx.setLineDash([]); ctx.restore();
 
-  // Near slab (3-D edge)
+  // 4 boundary lines
+  pLine(-TBL_HW, 0,     TBL_HW, 0,     3.5, 0.90);  // near end line (brightest)
+  pLine(-TBL_HW, TBL_D, TBL_HW, TBL_D, 2.0, 0.55);  // far end line
+  pLine(-TBL_HW, 0,    -TBL_HW, TBL_D, 2.0, 0.68);  // left side line
+  pLine( TBL_HW, 0,     TBL_HW, TBL_D, 2.0, 0.68);  // right side line
+
+  // Lengthwise centre line (x=0, full length — divides table for doubles service)
+  pLine(0, 0, 0, TBL_D, 1.5, 0.45);
+
+  // ── Slabs (3-D edge thickness) ────────────────────────────────────────────
   const SLAB = 13;
-  ctx.fillStyle='#0c3018';
-  ctx.beginPath();
-  ctx.moveTo(nl.sx,nl.sy); ctx.lineTo(nr.sx,nr.sy);
-  ctx.lineTo(nr.sx,nr.sy+SLAB); ctx.lineTo(nl.sx,nl.sy+SLAB);
-  ctx.closePath(); ctx.fill();
-  ctx.strokeStyle='rgba(255,255,255,0.12)'; ctx.lineWidth=1;
-  ctx.beginPath(); ctx.moveTo(nl.sx,nl.sy+SLAB); ctx.lineTo(nr.sx,nr.sy+SLAB); ctx.stroke();
+  function slabFace(p1, p2, d1, d2, col) {
+    ctx.fillStyle = col;
+    ctx.beginPath();
+    ctx.moveTo(p1.sx, p1.sy);     ctx.lineTo(p2.sx, p2.sy);
+    ctx.lineTo(p2.sx, p2.sy + d2); ctx.lineTo(p1.sx, p1.sy + d1);
+    ctx.closePath(); ctx.fill();
+  }
+
+  const dfar = SLAB * fl.scale;   // slab thickness at far end (≈4 px, perspective-correct)
+  slabFace(nl, nr, SLAB,  SLAB,  '#0c2c58');   // near — brightest, faces viewer
+  slabFace(nl, fl, SLAB,  dfar,  '#092248');    // left — shadow side
+  slabFace(nr, fr, SLAB,  dfar,  '#0e3064');    // right — slightly lighter
+  slabFace(fl, fr, dfar,  dfar,  '#071628');    // far  — darkest
+
+  // Bright seam at foot of near slab
+  ctx.strokeStyle = 'rgba(255,255,255,0.18)'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(nl.sx, nl.sy + SLAB); ctx.lineTo(nr.sx, nr.sy + SLAB); ctx.stroke();
 }
 
 // ── Draw: Net ─────────────────────────────────────────────────────────────────
@@ -804,8 +949,10 @@ function drawOpponentArm() {
 function drawPlayerRacket() {
   if (st.phase==='SELECT_SPIN') return;
 
+  const bh = (st.chosenHand || landSide()) === 'backhand';
+  const restAng = bh ? 0.30 : -0.30;
   let rx, ry, ang;
-  const rest = project(75, 48, 18);
+  const rest = project(bh ? -75 : 75, 48, 18);
 
   if (st.phase==='RESPONSE_ANIM' && st.response) {
     const kfs = PLAYER_KFS[st.response.id];
@@ -821,11 +968,12 @@ function drawPlayerRacket() {
       baseX = st.contactPos ? st.contactPos.sx : rest.sx;
       baseY = st.contactPos ? st.contactPos.sy : rest.sy;
     }
-    rx  = baseX + kf.ox;
+    // Mirror horizontally for backhand
+    rx  = baseX + (bh ? -kf.ox : kf.ox);
     ry  = baseY + kf.oy;
-    ang = kf.ang;
+    ang = bh ? -kf.ang : kf.ang;
 
-    // Record trail during active swing (skip the very start/end near-rest positions)
+    // Record trail during active swing
     if (st.playerT > 0.08 && st.playerT < 0.88) {
       racketTrail.push({rx, ry, ang});
       if (racketTrail.length > 22) racketTrail.shift();
@@ -835,16 +983,16 @@ function drawPlayerRacket() {
     const f = clamp(1 - (st.playerT - 1.0)*2, 0, 1);
     rx  = lerp(rest.sx, st.contactPos.sx, f);
     ry  = lerp(rest.sy, st.contactPos.sy, f);
-    ang = -0.30;
+    ang = restAng;
   } else {
-    rx  = rest.sx; ry = rest.sy; ang = -0.30;
+    rx  = rest.sx; ry = rest.sy; ang = restAng;
   }
 
-  // Draw swing ghost trail (fades from old → recent)
+  // Draw swing ghost trail
   if (racketTrail.length > 1 && (st.phase==='RESPONSE_ANIM' || st.phase==='OUTCOME')) {
     for (let i = 0; i < racketTrail.length; i++) {
       const pt = racketTrail[i];
-      const frac = (i + 1) / racketTrail.length;  // 0 = oldest, 1 = newest
+      const frac = (i + 1) / racketTrail.length;
       drawRacketGhost(pt.rx, pt.ry, pt.ang, frac * 0.32);
     }
   }
@@ -854,7 +1002,7 @@ function drawPlayerRacket() {
 
 // ── Apply response contact velocities ────────────────────────────────────────
 function applyContact() {
-  const od = OUTCOMES[st.spin][st.response.id];
+  const od = applySkillToOutcome(OUTCOMES[st.spin][st.response.id], st.response.id);
   st.outcome = od;
   const b = st.ball;
 
@@ -894,6 +1042,170 @@ function applyContact() {
   trail.length = 0;
 }
 
+// ── Draw: Gear button (always-visible settings access) ────────────────────────
+function drawGearButton() {
+  const gx = W-44, gy = 8, gw = 32, gh = 32;
+  const hov = mouseX >= gx && mouseX <= gx+gw && mouseY >= gy && mouseY <= gy+gh;
+  UI['gear'] = {x:gx, y:gy, w:gw, h:gh};
+  ctx.save();
+  ctx.fillStyle = hov ? 'rgba(30,42,58,0.90)' : 'rgba(16,24,38,0.55)';
+  rRect(gx, gy, gw, gh, 7); ctx.fill();
+  ctx.strokeStyle = hov ? '#6699cc' : 'rgba(255,255,255,0.12)'; ctx.lineWidth = 1;
+  rRect(gx, gy, gw, gh, 7); ctx.stroke();
+  ctx.font = '16px -apple-system,sans-serif';
+  ctx.fillStyle = hov ? '#fff' : 'rgba(160,180,210,0.55)';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('⚙', gx+gw/2, gy+gh/2);
+  ctx.restore();
+}
+
+// ── Draw: Settings panel ──────────────────────────────────────────────────────
+function drawSettings() {
+  ctx.fillStyle = 'rgba(4,7,18,0.97)'; ctx.fillRect(0,0,W,H);
+
+  // Title
+  ctx.save();
+  ctx.font = 'bold 18px -apple-system,sans-serif'; ctx.fillStyle = 'rgba(255,255,255,0.92)';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  ctx.fillText('My Skills', CX, 22);
+  ctx.restore();
+
+  // Subtitle
+  ctx.save();
+  ctx.font = '12px -apple-system,sans-serif'; ctx.fillStyle = 'rgba(140,165,200,0.60)';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  ctx.fillText('Set your skill level for each shot on both hands independently', CX, 48);
+  ctx.restore();
+
+  // Column headers — BH on left, FH on right
+  const bhCenter = 330, fhCenter = 550;
+  ctx.save();
+  ctx.font = 'bold 10px -apple-system,sans-serif'; ctx.fillStyle = 'rgba(77,212,240,0.80)';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  ctx.fillText('BACKHAND SKILL', bhCenter, 74);
+  ctx.fillStyle = 'rgba(246,173,85,0.80)';
+  ctx.fillText('FOREHAND SKILL', fhCenter, 74);
+  if (st.spin) {
+    ctx.fillStyle = 'rgba(120,145,180,0.70)';
+    ctx.fillText('vs ' + st.spin.toUpperCase(), 760, 74);
+  }
+  ctx.restore();
+
+  const rowH = 52, startY = 94;
+  const skillOpts = ['bad','avg','good'];
+  const SKILL_C = { bad:'#ef4444', avg:'#f97316', good:'#22c55e' };
+  const sBW = 52, sBH = 26, sGap = 5;
+
+  RESPONSES.forEach((r, i) => {
+    const sk  = playerSkills[r.id];
+    const ry2 = startY + i * rowH;
+    const rMid = ry2 + rowH/2;
+
+    if (i % 2 === 0) {
+      ctx.fillStyle = 'rgba(255,255,255,0.025)';
+      ctx.fillRect(0, ry2, W, rowH);
+    }
+
+    // Shot icon + label
+    ctx.save();
+    ctx.font = '14px -apple-system,sans-serif'; ctx.fillStyle = 'rgba(200,215,235,0.85)';
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.fillText(r.icon, 36, rMid);
+    ctx.font = 'bold 13px -apple-system,sans-serif';
+    ctx.fillText(r.label, 62, rMid);
+    ctx.restore();
+
+    // Forehand skill buttons
+    const fhStartX = fhCenter - (3*sBW + 2*sGap)/2;
+    skillOpts.forEach((s, j) => {
+      const bx = fhStartX + j*(sBW+sGap), by = rMid - sBH/2;
+      const active = sk.forehand === s;
+      const hov2 = mouseX>=bx&&mouseX<=bx+sBW&&mouseY>=by&&mouseY<=by+sBH;
+      UI['sk_fh_'+r.id+'_'+s] = {x:bx,y:by,w:sBW,h:sBH};
+      const col2 = SKILL_C[s];
+      ctx.save();
+      ctx.fillStyle = active ? col2+'28' : (hov2 ? '#1e2a3a' : '#10182a');
+      rRect(bx,by,sBW,sBH,5); ctx.fill();
+      ctx.strokeStyle = active ? col2 : (hov2 ? '#4a5a7a' : '#2a3a55'); ctx.lineWidth = active ? 1.5 : 1;
+      rRect(bx,by,sBW,sBH,5); ctx.stroke();
+      ctx.font = 'bold 11px -apple-system,sans-serif';
+      ctx.fillStyle = active ? col2 : (hov2 ? '#aabccc' : '#4a5a6a');
+      ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.fillText(s, bx+sBW/2, by+sBH/2);
+      ctx.restore();
+    });
+
+    // Backhand skill buttons
+    const bhStartX = bhCenter - (3*sBW + 2*sGap)/2;
+    skillOpts.forEach((s, j) => {
+      const bx = bhStartX + j*(sBW+sGap), by = rMid - sBH/2;
+      const active = sk.backhand === s;
+      const hov2 = mouseX>=bx&&mouseX<=bx+sBW&&mouseY>=by&&mouseY<=by+sBH;
+      UI['sk_bh_'+r.id+'_'+s] = {x:bx,y:by,w:sBW,h:sBH};
+      const col2 = SKILL_C[s];
+      ctx.save();
+      ctx.fillStyle = active ? col2+'28' : (hov2 ? '#1e2a3a' : '#10182a');
+      rRect(bx,by,sBW,sBH,5); ctx.fill();
+      ctx.strokeStyle = active ? col2 : (hov2 ? '#4a5a7a' : '#2a3a55'); ctx.lineWidth = active ? 1.5 : 1;
+      rRect(bx,by,sBW,sBH,5); ctx.stroke();
+      ctx.font = 'bold 11px -apple-system,sans-serif';
+      ctx.fillStyle = active ? col2 : (hov2 ? '#aabccc' : '#4a5a6a');
+      ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.fillText(s, bx+sBW/2, by+sBH/2);
+      ctx.restore();
+    });
+
+    // Outcome preview (vs current spin, using the relevant hand for current ball side)
+    if (st.spin) {
+      const adjOd = applySkillToOutcome(OUTCOMES[st.spin][r.id], r.id);
+      ctx.save();
+      ctx.font = 'bold 11px -apple-system,sans-serif';
+      ctx.fillStyle = RATING_COLOR[adjOd.rating] || '#888';
+      ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+      ctx.fillText(RATING_LABEL[adjOd.rating] || adjOd.rating, 700, rMid);
+      ctx.restore();
+    }
+  });
+
+  // Timeout toggle row
+  const toY = startY + RESPONSES.length * rowH + 10;
+  ctx.save();
+  ctx.font = 'bold 12px -apple-system,sans-serif'; ctx.fillStyle = 'rgba(200,215,235,0.85)';
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  ctx.fillText('Response timeout (4s)', 36, toY + 18);
+  ctx.font = '11px -apple-system,sans-serif'; ctx.fillStyle = 'rgba(120,145,180,0.60)';
+  ctx.fillText('Auto-picks a random shot when time runs out', 36, toY + 34);
+  ctx.restore();
+
+  const toW = 72, toH = 28, toX = 450, toBY = toY + 4;
+  const toHov = mouseX>=toX&&mouseX<=toX+toW&&mouseY>=toBY&&mouseY<=toBY+toH;
+  UI['sk_timeout'] = {x:toX, y:toBY, w:toW, h:toH};
+  ctx.save();
+  ctx.fillStyle = responseTimeoutEnabled ? '#166534' : '#10182a';
+  rRect(toX,toBY,toW,toH,6); ctx.fill();
+  ctx.strokeStyle = responseTimeoutEnabled ? '#22c55e' : (toHov ? '#4a5a7a' : '#2a3a55'); ctx.lineWidth = 1.5;
+  rRect(toX,toBY,toW,toH,6); ctx.stroke();
+  ctx.font = 'bold 12px -apple-system,sans-serif';
+  ctx.fillStyle = responseTimeoutEnabled ? '#22c55e' : '#4a5a6a';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(responseTimeoutEnabled ? 'ON' : 'OFF', toX+toW/2, toBY+toH/2);
+  ctx.restore();
+
+  // Done button
+  const dW=120, dH=40, dX=CX-60, dY=H-52;
+  const dHov = mouseX>=dX&&mouseX<=dX+dW&&mouseY>=dY&&mouseY<=dY+dH;
+  UI['sk_done'] = {x:dX,y:dY,w:dW,h:dH};
+  ctx.save();
+  ctx.fillStyle = dHov ? '#1d4ed8' : '#1a2840';
+  rRect(dX,dY,dW,dH,8); ctx.fill();
+  ctx.strokeStyle = dHov ? '#60a5fa' : '#3b4a65'; ctx.lineWidth = 1.5;
+  rRect(dX,dY,dW,dH,8); ctx.stroke();
+  ctx.font = 'bold 13px -apple-system,sans-serif'; ctx.fillStyle = '#fff';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('Done', dX+dW/2, dY+dH/2);
+  ctx.restore();
+}
+
 // ── UI: hit test ──────────────────────────────────────────────────────────────
 function hit(x, y, r) { return r && x>=r.x && x<=r.x+r.w && y>=r.y && y<=r.y+r.h; }
 
@@ -904,46 +1216,99 @@ function drawSelectSpin() {
 
 // ── UI: draw response panel ───────────────────────────────────────────────────
 function drawResponsePanel() {
-  const panelY=H-158, panelH=158;
+  // Start panel just below table near-edge slab (TBL_NEAR_Y=515 + slab=13 + 2px gap)
+  const panelY = 530, panelH = H - panelY;
+  const SKILL_C = {bad:'#ef4444', avg:'#f97316', good:'#22c55e'};
 
-  // Dark panel
-  ctx.fillStyle='rgba(6,9,22,0.93)'; ctx.fillRect(0,panelY,W,panelH);
+  ctx.fillStyle='rgba(6,9,22,0.97)'; ctx.fillRect(0,panelY,W,panelH);
   ctx.strokeStyle='rgba(255,255,255,0.10)'; ctx.lineWidth=1;
   ctx.beginPath(); ctx.moveTo(0,panelY); ctx.lineTo(W,panelY); ctx.stroke();
 
-  // Header
-  ctx.save();
-  ctx.font='bold 14px -apple-system,sans-serif'; ctx.fillStyle='rgba(255,255,255,0.85)';
-  ctx.textAlign='center'; ctx.textBaseline='top';
-  ctx.fillText('How do you respond?', CX, panelY+10);
-  ctx.restore();
+  // Centre divider
+  ctx.strokeStyle='rgba(255,255,255,0.07)'; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(CX,panelY); ctx.lineTo(CX,H); ctx.stroke();
 
-  const bW=110, bH=62, bGap=8;
-  const totalBW=RESPONSES.length*bW+(RESPONSES.length-1)*bGap;
-  const bStartX=CX-totalBW/2;
-  const bY=panelY+36;
-  const col = st.spin ? SPIN_CFG[st.spin].color : '#6688aa';
-
-  RESPONSES.forEach((r,i) => {
-    const bx=bStartX+i*(bW+bGap);
-    const hov=mouseX>=bx&&mouseX<=bx+bW&&mouseY>=bY&&mouseY<=bY+bH;
-    UI['resp_'+r.id]={x:bx,y:bY,w:bW,h:bH};
-
+  // Timeout countdown bar (centred at top of panel)
+  if (responseTimeoutEnabled) {
+    const barW=160, barH=3, barX=CX-barW/2, barY=panelY+4;
+    const frac=1-st.responseTimer/RESPONSE_TIMEOUT_FRAMES;
+    const barCol=frac>0.5?'#22c55e':frac>0.25?'#f97316':'#ef4444';
     ctx.save();
-    ctx.fillStyle=hov?'#1c2a3a':'#101826'; ctx.globalAlpha=hov?1.0:0.90;
-    rRect(bx,bY,bW,bH,8); ctx.fill();
-    ctx.strokeStyle=hov?col:col+'50'; ctx.lineWidth=hov?1.8:1;
-    rRect(bx,bY,bW,bH,8); ctx.stroke();
+    ctx.fillStyle='rgba(255,255,255,0.10)'; ctx.fillRect(barX,barY,barW,barH);
+    ctx.fillStyle=barCol; ctx.fillRect(barX,barY,barW*Math.max(0,frac),barH);
     ctx.restore();
+  }
 
+  const ls = landSide();
+  // Each half gets 7 buttons in a single horizontal row
+  const bW=54, bH=46, bGap=3;
+  const totalBW = RESPONSES.length*bW + (RESPONSES.length-1)*bGap;  // 396
+  const sectionW = CX;   // 450 px per half
+  const margin = (sectionW - totalBW) / 2;  // 27 px padding each side
+  const bY = panelY + 22;
+
+  // Draw one column of 7 buttons for a given hand inside its canvas half
+  function drawColumn(hand, sectionStartX, label, labelColor) {
+    const bStartX = sectionStartX + margin;
+
+    // Section label
     ctx.save();
-    ctx.font='20px -apple-system,sans-serif'; ctx.fillStyle=hov?'#fff':'rgba(200,212,232,0.9)';
+    ctx.font='bold 10px -apple-system,sans-serif'; ctx.fillStyle=labelColor;
     ctx.textAlign='center'; ctx.textBaseline='middle';
-    ctx.fillText(r.icon, bx+bW/2, bY+22);
-    ctx.font='bold 11px -apple-system,sans-serif'; ctx.fillStyle=hov?'#fff':'rgba(155,172,200,0.85)';
-    ctx.fillText(r.label, bx+bW/2, bY+44);
+    ctx.fillText(label, sectionStartX + sectionW/2, panelY + 11);
     ctx.restore();
-  });
+
+    const naturalHand = ls==='mid' ? null : ls;
+    const colIsNatural = !naturalHand || naturalHand===hand;
+
+    RESPONSES.forEach((r,i) => {
+      const bx = bStartX + i*(bW+bGap);
+      const hov = mouseX>=bx && mouseX<=bx+bW && mouseY>=bY && mouseY<=bY+bH;
+      UI['resp_'+hand+'_'+r.id] = {x:bx, y:bY, w:bW, h:bH};
+
+      const sk = playerSkills[r.id];
+      const skill = sk[hand];
+      const adjOd = applySkillToOutcome(OUTCOMES[st.spin][r.id], r.id, hand);
+      const adjCol = RATING_COLOR[adjOd.rating] || '#888';
+      const isBad = skill==='bad';
+
+      ctx.save();
+      ctx.globalAlpha = isBad ? 0.28 : (!colIsNatural ? 0.55 : (hov ? 1.0 : 0.88));
+      ctx.fillStyle = hov ? '#1c2a3a' : '#101826';
+      rRect(bx,bY,bW,bH,6); ctx.fill();
+      ctx.strokeStyle = hov ? adjCol : adjCol+'55'; ctx.lineWidth = hov ? 1.8 : 1;
+      rRect(bx,bY,bW,bH,6); ctx.stroke();
+      ctx.restore();
+
+      // Skill dot (top-right corner)
+      ctx.save();
+      ctx.globalAlpha = isBad ? 0.28 : (!colIsNatural ? 0.55 : 1.0);
+      ctx.beginPath(); ctx.arc(bx+bW-7, bY+7, 3.5, 0, Math.PI*2);
+      ctx.fillStyle = SKILL_C[skill]; ctx.fill();
+      ctx.restore();
+
+      // Icon
+      ctx.save();
+      ctx.globalAlpha = isBad ? 0.28 : (!colIsNatural ? 0.55 : (hov?1.0:0.88));
+      ctx.font='16px -apple-system,sans-serif'; ctx.fillStyle=hov?'#fff':'rgba(200,212,232,0.9)';
+      ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.fillText(r.icon, bx+bW/2, bY+17);
+      ctx.restore();
+
+      // Label
+      ctx.save();
+      ctx.globalAlpha = isBad ? 0.28 : (!colIsNatural ? 0.55 : (hov?1.0:0.88));
+      ctx.font='bold 9px -apple-system,sans-serif'; ctx.fillStyle=hov?'#fff':'rgba(155,172,200,0.85)';
+      ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.fillText(r.label, bx+bW/2, bY+33);
+      ctx.restore();
+    });
+  }
+
+  const bhColor = ls==='backhand' ? '#4dd4f0' : 'rgba(77,212,240,0.45)';
+  const fhColor = ls==='forehand' ? '#f97316' : 'rgba(249,115,22,0.45)';
+  drawColumn('backhand', 0,   '← BACKHAND', bhColor);  // LEFT half
+  drawColumn('forehand', CX,  'FOREHAND →', fhColor);  // RIGHT half
 }
 
 // ── UI: draw outcome ──────────────────────────────────────────────────────────
@@ -981,7 +1346,8 @@ function drawOutcome() {
     rRect(barX, barY, barW*frac, barH, 3); ctx.fill();
     ctx.font='11px -apple-system,sans-serif'; ctx.fillStyle='rgba(180,200,220,0.60)';
     ctx.textAlign='right'; ctx.textBaseline='middle';
-    ctx.fillText('Opponent returning…', barX+barW, barY+barH+14);
+    const oppText = st.oppResponse ? 'Opponent: ' + st.oppResponse.swingLabel : 'Opponent returning…';
+    ctx.fillText(oppText, barX+barW, barY+barH+14);
     ctx.restore();
 
   } else {
@@ -1065,6 +1431,20 @@ function drawHUD() {
     ctx.textAlign='center'; ctx.textBaseline='top';
     ctx.fillText('Read the spin…', CX, 16);
     ctx.restore();
+
+    // Land zone hint once ball is incoming
+    if (st.phase==='BALL_INCOMING') {
+      const ls = landSide();
+      if (ls !== 'mid') {
+        const lsColor = ls==='forehand' ? '#f97316' : '#4dd4f0';
+        const lsLabel = ls==='forehand' ? 'FOREHAND →' : '← BACKHAND';
+        ctx.save();
+        ctx.font='bold 11px -apple-system,sans-serif'; ctx.fillStyle=lsColor+'99';
+        ctx.textAlign='center'; ctx.textBaseline='bottom';
+        ctx.fillText(lsLabel, CX, H-10);
+        ctx.restore();
+      }
+    }
   }
   if (st.phase==='RESPONSE_ANIM' && st.response) {
     ctx.save();
@@ -1077,12 +1457,11 @@ function drawHUD() {
     }
     ctx.restore();
   }
-  // Rally score
   if (st.score > 0) {
     ctx.save();
     ctx.font='bold 12px -apple-system,sans-serif'; ctx.fillStyle='rgba(255,255,255,0.50)';
     ctx.textAlign='right'; ctx.textBaseline='top';
-    ctx.fillText('Rally: ' + st.score, W-16, 16);
+    ctx.fillText('Rally: ' + st.score, W-52, 16);
     ctx.restore();
   }
 }
@@ -1090,12 +1469,14 @@ function drawHUD() {
 // ── Main UI dispatcher ────────────────────────────────────────────────────────
 function drawUI() {
   spinArrowT += 0.04;
+  if (showSettings) { drawSettings(); return; }
   switch (st.phase) {
     case 'SELECT_SPIN':     drawSelectSpin();    break;
     case 'SELECT_RESPONSE': drawResponsePanel(); break;
     case 'OUTCOME':         drawOutcome();       break;
     default:                drawHUD();           break;
   }
+  drawGearButton();
 }
 
 // ── Main loop ─────────────────────────────────────────────────────────────────
@@ -1135,8 +1516,19 @@ function loop() {
     }
 
     case 'BALL_INCOMING':
+      updateBall();
+      break;
     case 'SELECT_RESPONSE':
       updateBall();
+      if (responseTimeoutEnabled) {
+        st.responseTimer++;
+        if (st.responseTimer >= RESPONSE_TIMEOUT_FRAMES) {
+          // Time up — auto-pick a random response for the natural hand (simulate panic)
+          st.chosenHand = landSide() === 'backhand' ? 'backhand' : 'forehand';
+          st.response = RESPONSES[Math.floor(Math.random() * RESPONSES.length)];
+          go('RESPONSE_ANIM');
+        }
+      }
       break;
 
     case 'RESPONSE_ANIM': {
@@ -1190,10 +1582,37 @@ canvas.addEventListener('click', e => {
   const r=canvas.getBoundingClientRect();
   const cx=e.clientX-r.left, cy=e.clientY-r.top;
 
+  // Gear button — opens settings from any phase
+  if (!showSettings && hit(cx,cy,UI['gear'])) { showSettings=true; return; }
+
+  // Settings panel interactions
+  if (showSettings) {
+    if (hit(cx,cy,UI['sk_done'])) { showSettings=false; saveSkills(); saveTimeout(); return; }
+    if (hit(cx,cy,UI['sk_timeout'])) { responseTimeoutEnabled=!responseTimeoutEnabled; saveTimeout(); return; }
+    for (const r2 of RESPONSES) {
+      for (const s of ['bad','avg','good']) {
+        if (hit(cx,cy,UI['sk_fh_'+r2.id+'_'+s])) {
+          playerSkills[r2.id] = Object.assign({}, playerSkills[r2.id], {forehand:s});
+          saveSkills(); return;
+        }
+        if (hit(cx,cy,UI['sk_bh_'+r2.id+'_'+s])) {
+          playerSkills[r2.id] = Object.assign({}, playerSkills[r2.id], {backhand:s});
+          saveSkills(); return;
+        }
+      }
+    }
+    return;
+  }
+
   switch (st.phase) {
     case 'SELECT_RESPONSE':
-      for (const r of RESPONSES) {
-        if (hit(cx,cy,UI['resp_'+r.id])) { st.response=r; go('RESPONSE_ANIM'); break; }
+      for (const r2 of RESPONSES) {
+        if (hit(cx,cy,UI['resp_backhand_'+r2.id])) {
+          st.chosenHand='backhand'; st.response=r2; go('RESPONSE_ANIM'); break;
+        }
+        if (hit(cx,cy,UI['resp_forehand_'+r2.id])) {
+          st.chosenHand='forehand'; st.response=r2; go('RESPONSE_ANIM'); break;
+        }
       }
       break;
     case 'OUTCOME':
